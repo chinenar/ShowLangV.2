@@ -1,0 +1,28 @@
+# .NET build output
+**/bin/
+**/obj/
+.vs/
+
+# User-specific IDE files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Runtime and published binaries
+app/*
+!app/.gitkeep
+*.exe
+*.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+
+# Local migration backups and logs
+.archive/
+*.log
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+*.tmp
