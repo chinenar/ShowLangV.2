@@ -12,7 +12,7 @@ internal sealed class LanguageMonitor : IDisposable
         _overlay = overlay;
         _timer = new System.Windows.Forms.Timer
         {
-            Interval = 45,
+            Interval = 20,
         };
         _timer.Tick += (_, _) => ShowCurrent(force: false);
     }
@@ -39,11 +39,14 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
-            uint threadId = NativeMethods.GetWindowThreadProcessId(
-                foreground,
-                out _);
-            IntPtr layout = NativeMethods.GetKeyboardLayout(threadId);
+            CaretLocator.Track(foreground);
+            uint threadId = NativeMethods.GetInputThreadId(foreground);
+            if (threadId == 0)
+            {
+                return;
+            }
 
+            IntPtr layout = NativeMethods.GetKeyboardLayout(threadId);
             if (!force && _previousLayout == layout)
             {
                 return;
@@ -56,10 +59,19 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
-            ushort languageId = unchecked((ushort)((long)layout & 0xFFFF));
+            ushort languageId = unchecked(
+                (ushort)((long)layout & 0xFFFF));
             string language = LanguageNames.FromLanguageId(languageId);
             AnchorTarget target = CaretLocator.Locate(foreground);
             _overlay.ShowLanguage(language, target);
+
+            NativeMethods.GetWindowThreadProcessId(
+                foreground,
+                out uint processId);
+            AppLog.Write(
+                $"SHOW language={language} source={target.Source} "
+                + $"bounds={target.Bounds} hwnd=0x{foreground.ToInt64():X} "
+                + $"pid={processId}");
         }
         catch (Exception exception)
         {

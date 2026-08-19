@@ -9,15 +9,44 @@ internal static class NativeMethods
     internal const int SwShowNoActivate = 4;
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
+    internal const uint SwpNoOwnerZOrder = 0x0200;
 
+    internal const int WsExTopMost = 0x00000008;
     internal const int WsExTransparent = 0x00000020;
     internal const int WsExToolWindow = 0x00000080;
-    internal const int WsExLayered = 0x00080000;
     internal const int WsExNoActivate = 0x08000000;
     internal const int CsDropShadow = 0x00020000;
 
     internal const int DwmwaWindowCornerPreference = 33;
     internal const int DwmwcpRound = 2;
+    internal const uint ObjidCaret = 0xFFFFFFF8;
+
+    internal static uint GetInputThreadId(IntPtr foreground)
+    {
+        uint threadId = GetWindowThreadProcessId(foreground, out _);
+        if (threadId == 0)
+        {
+            return 0;
+        }
+
+        GuiThreadInfo info = new()
+        {
+            Size = (uint)Marshal.SizeOf<GuiThreadInfo>(),
+        };
+        if (GetGUIThreadInfo(threadId, ref info)
+            && info.FocusWindow != IntPtr.Zero)
+        {
+            uint focusThreadId = GetWindowThreadProcessId(
+                info.FocusWindow,
+                out _);
+            if (focusThreadId != 0)
+            {
+                return focusThreadId;
+            }
+        }
+
+        return threadId;
+    }
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
@@ -47,6 +76,17 @@ internal static class NativeMethods
     internal static extern bool GetWindowRect(
         IntPtr hWnd,
         out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("oleacc.dll")]
+    internal static extern int AccessibleObjectFromWindow(
+        IntPtr hWnd,
+        uint objectId,
+        ref Guid interfaceId,
+        [MarshalAs(UnmanagedType.Interface)] out object accessibleObject);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

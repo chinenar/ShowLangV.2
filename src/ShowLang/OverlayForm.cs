@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 
@@ -6,11 +5,9 @@ namespace ShowLangNative;
 
 internal sealed class OverlayForm : Form
 {
-    private const int FadeStartsAtMilliseconds = 700;
-    private const int HideAtMilliseconds = 1050;
+    private const int HideAfterMilliseconds = 1150;
 
-    private readonly System.Windows.Forms.Timer _animationTimer;
-    private readonly Stopwatch _visibleFor = new();
+    private readonly System.Windows.Forms.Timer _hideTimer;
     private readonly Font _languageFont;
     private string _language = string.Empty;
 
@@ -30,11 +27,16 @@ internal sealed class OverlayForm : Form
             FontStyle.Bold,
             GraphicsUnit.Point);
 
-        _animationTimer = new System.Windows.Forms.Timer
+        _hideTimer = new System.Windows.Forms.Timer
         {
-            Interval = 16,
+            Interval = HideAfterMilliseconds,
         };
-        _animationTimer.Tick += (_, _) => Animate();
+        _hideTimer.Tick += (_, _) =>
+        {
+            _hideTimer.Stop();
+            Hide();
+        };
+
         Size = new Size(58, 38);
         UpdateWindowRegion();
     }
@@ -46,9 +48,9 @@ internal sealed class OverlayForm : Form
         get
         {
             CreateParams parameters = base.CreateParams;
-            parameters.ExStyle |= NativeMethods.WsExTransparent
+            parameters.ExStyle |= NativeMethods.WsExTopMost
+                | NativeMethods.WsExTransparent
                 | NativeMethods.WsExToolWindow
-                | NativeMethods.WsExLayered
                 | NativeMethods.WsExNoActivate;
             parameters.ClassStyle |= NativeMethods.CsDropShadow;
             return parameters;
@@ -71,7 +73,6 @@ internal sealed class OverlayForm : Form
 
         Point location = CalculateLocation(target);
         Bounds = new Rectangle(location, Size);
-        Opacity = 1D;
         Invalidate();
 
         if (!Visible)
@@ -86,77 +87,50 @@ internal sealed class OverlayForm : Form
             location.Y,
             Width,
             Height,
-            NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow);
+            NativeMethods.SwpNoActivate
+                | NativeMethods.SwpShowWindow
+                | NativeMethods.SwpNoOwnerZOrder);
         NativeMethods.ShowWindow(Handle, NativeMethods.SwShowNoActivate);
+        Update();
 
-        _visibleFor.Restart();
-        _animationTimer.Start();
-    }
-
-    private void Animate()
-    {
-        double elapsed = _visibleFor.Elapsed.TotalMilliseconds;
-        if (elapsed >= HideAtMilliseconds)
-        {
-            _animationTimer.Stop();
-            _visibleFor.Stop();
-            Hide();
-            return;
-        }
-
-        if (elapsed >= FadeStartsAtMilliseconds)
-        {
-            double progress = (elapsed - FadeStartsAtMilliseconds)
-                / (HideAtMilliseconds - FadeStartsAtMilliseconds);
-            Opacity = Math.Clamp(1D - progress, 0.05D, 1D);
-        }
+        _hideTimer.Stop();
+        _hideTimer.Start();
     }
 
     private Point CalculateLocation(AnchorTarget target)
     {
         Rectangle anchor = target.Bounds;
-        Rectangle area = Screen.FromRectangle(anchor).Bounds;
+        Screen screen = Screen.FromRectangle(anchor);
+        Rectangle area = screen.Bounds;
         int x;
         int y;
 
-        switch (target.Kind)
+        if (target.Kind == AnchorKind.Caret)
         {
-            case AnchorKind.Caret:
-                x = anchor.Right + 10;
-                y = anchor.Top - Height - 7;
-                if (y < area.Top)
-                {
-                    y = anchor.Bottom + 7;
-                }
-                if (x + Width > area.Right)
-                {
-                    x = anchor.Left - Width - 10;
-                }
-                break;
+            x = anchor.Right + 8;
+            y = anchor.Top - Height - 6;
+            if (y < area.Top)
+            {
+                y = anchor.Bottom + 6;
+            }
 
-            case AnchorKind.Element:
-                bool fillsMostOfScreen = anchor.Width > area.Width * 0.7
-                    && anchor.Height > area.Height * 0.7;
-                if (fillsMostOfScreen)
-                {
-                    x = anchor.Left + ((anchor.Width - Width) / 2);
-                    y = anchor.Top + 32;
-                }
-                else
-                {
-                    x = anchor.Left + 10;
-                    y = anchor.Top + 10;
-                }
-                break;
-
-            default:
-                x = anchor.Left + ((anchor.Width - Width) / 2);
-                y = anchor.Top + 32;
-                break;
+            if (x + Width > area.Right)
+            {
+                x = anchor.Left - Width - 8;
+            }
+        }
+        else
+        {
+            x = anchor.Left + ((anchor.Width - Width) / 2);
+            y = anchor.Top + 38;
         }
 
-        int maximumX = Math.Max(area.Left + 4, area.Right - Width - 4);
-        int maximumY = Math.Max(area.Top + 4, area.Bottom - Height - 4);
+        int maximumX = Math.Max(
+            area.Left + 4,
+            area.Right - Width - 4);
+        int maximumY = Math.Max(
+            area.Top + 4,
+            area.Bottom - Height - 4);
         x = Math.Clamp(x, area.Left + 4, maximumX);
         y = Math.Clamp(y, area.Top + 4, maximumY);
         return new Point(x, y);
@@ -169,8 +143,10 @@ internal sealed class OverlayForm : Form
 
         Rectangle rectangle = new(0, 0, Width - 1, Height - 1);
         using GraphicsPath path = CreateRoundedPath(rectangle, 10);
-        using SolidBrush background = new(Color.FromArgb(238, 28, 30, 38));
-        using Pen border = new(Color.FromArgb(110, 255, 255, 255), 1F);
+        using SolidBrush background = new(BackColor);
+        using Pen border = new(
+            Color.FromArgb(110, 255, 255, 255),
+            1F);
 
         e.Graphics.FillPath(background, path);
         e.Graphics.DrawPath(border, path);
@@ -254,7 +230,7 @@ internal sealed class OverlayForm : Form
     {
         if (disposing)
         {
-            _animationTimer.Dispose();
+            _hideTimer.Dispose();
             _languageFont.Dispose();
         }
 
