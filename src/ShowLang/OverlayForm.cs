@@ -8,11 +8,13 @@ internal sealed class OverlayForm : Form
     private const int HideAfterMilliseconds = 1150;
 
     private readonly System.Windows.Forms.Timer _hideTimer;
-    private readonly Font _languageFont;
+    private Font _languageFont;
+    private int _scalePercent;
     private string _language = string.Empty;
 
-    internal OverlayForm()
+    internal OverlayForm(ShowLangSettings settings)
     {
+        _scalePercent = Math.Clamp(settings.ScalePercent, 60, 200);
         AutoScaleMode = AutoScaleMode.None;
         BackColor = Color.FromArgb(28, 30, 38);
         DoubleBuffered = true;
@@ -21,11 +23,11 @@ internal sealed class OverlayForm : Form
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
 
-        _languageFont = new Font(
-            "Segoe UI Variable Display",
-            12F,
-            FontStyle.Bold,
-            GraphicsUnit.Point);
+        _languageFont = CreateLanguageFont(_scalePercent);
+        Opacity = Math.Clamp(
+            settings.OpacityPercent,
+            40,
+            100) / 100D;
 
         _hideTimer = new System.Windows.Forms.Timer
         {
@@ -37,7 +39,9 @@ internal sealed class OverlayForm : Form
             Hide();
         };
 
-        Size = new Size(58, 38);
+        Size = new Size(
+            ScaleValue(58),
+            ScaleValue(38));
         UpdateWindowRegion();
     }
 
@@ -60,15 +64,7 @@ internal sealed class OverlayForm : Form
     internal void ShowLanguage(string language, AnchorTarget target)
     {
         _language = language;
-        Size textSize = TextRenderer.MeasureText(
-            language,
-            _languageFont,
-            Size.Empty,
-            TextFormatFlags.NoPadding);
-
-        Size = new Size(
-            Math.Max(58, textSize.Width + 24),
-            38);
+        UpdateWindowSize();
         UpdateWindowRegion();
 
         Point location = CalculateLocation(target);
@@ -101,6 +97,58 @@ internal sealed class OverlayForm : Form
     {
         _hideTimer.Stop();
         Hide();
+    }
+
+    internal void ApplyAppearance(
+        int scalePercent,
+        int opacityPercent)
+    {
+        scalePercent = Math.Clamp(scalePercent, 60, 200);
+        opacityPercent = Math.Clamp(opacityPercent, 40, 100);
+
+        if (_scalePercent != scalePercent)
+        {
+            _scalePercent = scalePercent;
+            Font previousFont = _languageFont;
+            _languageFont = CreateLanguageFont(_scalePercent);
+            previousFont.Dispose();
+        }
+
+        Opacity = opacityPercent / 100D;
+        UpdateWindowSize();
+        UpdateWindowRegion();
+        Invalidate();
+    }
+
+    private void UpdateWindowSize()
+    {
+        Size textSize = TextRenderer.MeasureText(
+            _language,
+            _languageFont,
+            Size.Empty,
+            TextFormatFlags.NoPadding);
+
+        Size = new Size(
+            Math.Max(
+                ScaleValue(58),
+                textSize.Width + ScaleValue(24)),
+            ScaleValue(38));
+    }
+
+    private int ScaleValue(int value)
+    {
+        return Math.Max(
+            1,
+            (int)Math.Round(value * _scalePercent / 100D));
+    }
+
+    private static Font CreateLanguageFont(int scalePercent)
+    {
+        return new Font(
+            "Segoe UI Variable Display",
+            12F * scalePercent / 100F,
+            FontStyle.Bold,
+            GraphicsUnit.Point);
     }
 
     private Point CalculateLocation(AnchorTarget target)
@@ -301,7 +349,9 @@ internal sealed class OverlayForm : Form
         e.Graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
         Rectangle rectangle = new(0, 0, Width - 1, Height - 1);
-        using GraphicsPath path = CreateRoundedPath(rectangle, 10);
+        using GraphicsPath path = CreateRoundedPath(
+            rectangle,
+            ScaleValue(10));
         using SolidBrush background = new(BackColor);
         using Pen border = new(
             Color.FromArgb(110, 255, 255, 255),
@@ -336,7 +386,7 @@ internal sealed class OverlayForm : Form
     {
         using GraphicsPath path = CreateRoundedPath(
             new Rectangle(0, 0, Width, Height),
-            10);
+            ScaleValue(10));
         Region? previous = Region;
         Region = new Region(path);
         previous?.Dispose();
