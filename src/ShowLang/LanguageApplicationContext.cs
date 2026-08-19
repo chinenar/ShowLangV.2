@@ -78,7 +78,7 @@ internal sealed class LanguageApplicationContext : ApplicationContext
         AddScaleOption(sizeItem, 150, "Extra large (150%)");
         AddScaleOption(sizeItem, 200, "Huge (200%)");
 
-        ToolStripMenuItem transparencyItem = new("Transparency");
+        ToolStripMenuItem transparencyItem = new("Box transparency");
         AddOpacityOption(transparencyItem, 100, "0% (Opaque)");
         AddOpacityOption(transparencyItem, 85, "15%");
         AddOpacityOption(transparencyItem, 70, "30%");

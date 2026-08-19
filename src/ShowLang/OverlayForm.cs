@@ -10,11 +10,16 @@ internal sealed class OverlayForm : Form
     private readonly System.Windows.Forms.Timer _hideTimer;
     private Font _languageFont;
     private int _scalePercent;
+    private int _backgroundOpacityPercent;
     private string _language = string.Empty;
 
     internal OverlayForm(ShowLangSettings settings)
     {
         _scalePercent = Math.Clamp(settings.ScalePercent, 60, 200);
+        _backgroundOpacityPercent = Math.Clamp(
+            settings.OpacityPercent,
+            40,
+            100);
         AutoScaleMode = AutoScaleMode.None;
         BackColor = Color.FromArgb(28, 30, 38);
         DoubleBuffered = true;
@@ -24,10 +29,7 @@ internal sealed class OverlayForm : Form
         TopMost = true;
 
         _languageFont = CreateLanguageFont(_scalePercent);
-        Opacity = Math.Clamp(
-            settings.OpacityPercent,
-            40,
-            100) / 100D;
+        Opacity = 1D;
 
         _hideTimer = new System.Windows.Forms.Timer
         {
@@ -42,7 +44,6 @@ internal sealed class OverlayForm : Form
         Size = new Size(
             ScaleValue(58),
             ScaleValue(38));
-        UpdateWindowRegion();
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -54,6 +55,7 @@ internal sealed class OverlayForm : Form
             CreateParams parameters = base.CreateParams;
             parameters.ExStyle |= NativeMethods.WsExTopMost
                 | NativeMethods.WsExTransparent
+                | NativeMethods.WsExLayered
                 | NativeMethods.WsExToolWindow
                 | NativeMethods.WsExNoActivate;
             parameters.ClassStyle |= NativeMethods.CsDropShadow;
@@ -65,16 +67,23 @@ internal sealed class OverlayForm : Form
     {
         _language = language;
         UpdateWindowSize();
-        UpdateWindowRegion();
 
         Point location = CalculateLocation(target);
         Bounds = new Rectangle(location, Size);
-        Invalidate();
 
         if (!Visible)
         {
             Show();
         }
+
+        LayeredWindowRenderer.Render(
+            Handle,
+            location,
+            Size,
+            _language,
+            _languageFont,
+            _scalePercent,
+            _backgroundOpacityPercent);
 
         NativeMethods.SetWindowPos(
             Handle,
@@ -87,7 +96,6 @@ internal sealed class OverlayForm : Form
                 | NativeMethods.SwpShowWindow
                 | NativeMethods.SwpNoOwnerZOrder);
         NativeMethods.ShowWindow(Handle, NativeMethods.SwShowNoActivate);
-        Update();
 
         _hideTimer.Stop();
         _hideTimer.Start();
@@ -114,10 +122,21 @@ internal sealed class OverlayForm : Form
             previousFont.Dispose();
         }
 
-        Opacity = opacityPercent / 100D;
+        _backgroundOpacityPercent = opacityPercent;
+        Opacity = 1D;
         UpdateWindowSize();
-        UpdateWindowRegion();
-        Invalidate();
+
+        if (Visible)
+        {
+            LayeredWindowRenderer.Render(
+                Handle,
+                Location,
+                Size,
+                _language,
+                _languageFont,
+                _scalePercent,
+                _backgroundOpacityPercent);
+        }
     }
 
     private void UpdateWindowSize()

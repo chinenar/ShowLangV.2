@@ -13,6 +13,7 @@ internal static class NativeMethods
 
     internal const int WsExTopMost = 0x00000008;
     internal const int WsExTransparent = 0x00000020;
+    internal const int WsExLayered = 0x00080000;
     internal const int WsExToolWindow = 0x00000080;
     internal const int WsExNoActivate = 0x08000000;
     internal const int CsDropShadow = 0x00020000;
@@ -20,6 +21,10 @@ internal static class NativeMethods
     internal const int DwmwaWindowCornerPreference = 33;
     internal const int DwmwcpRound = 2;
     internal const uint ObjidCaret = 0xFFFFFFF8;
+
+    internal const uint UlwAlpha = 0x00000002;
+    internal const byte AcSrcOver = 0x00;
+    internal const byte AcSrcAlpha = 0x01;
 
     internal static uint GetInputThreadId(IntPtr foreground)
     {
@@ -105,6 +110,43 @@ internal static class NativeMethods
         IntPtr hWnd,
         int command);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern int ReleaseDC(
+        IntPtr hWnd,
+        IntPtr hDc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern IntPtr CreateCompatibleDC(IntPtr hDc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteDC(IntPtr hDc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern IntPtr SelectObject(
+        IntPtr hDc,
+        IntPtr hObject);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UpdateLayeredWindow(
+        IntPtr hWnd,
+        IntPtr destinationDc,
+        ref NativePoint destinationPoint,
+        ref NativeSize size,
+        IntPtr sourceDc,
+        ref NativePoint sourcePoint,
+        uint colorKey,
+        ref BlendFunction blend,
+        uint flags);
+
     [DllImport("dwmapi.dll")]
     internal static extern int DwmSetWindowAttribute(
         IntPtr hWnd,
@@ -123,6 +165,28 @@ internal static class NativeMethods
             X = x;
             Y = y;
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativeSize
+    {
+        internal int Width;
+        internal int Height;
+
+        internal NativeSize(int width, int height)
+        {
+            Width = width;
+            Height = height;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct BlendFunction
+    {
+        internal byte BlendOp;
+        internal byte BlendFlags;
+        internal byte SourceConstantAlpha;
+        internal byte AlphaFormat;
     }
 
     [StructLayout(LayoutKind.Sequential)]

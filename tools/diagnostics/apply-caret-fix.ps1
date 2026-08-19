@@ -1,5 +1,7 @@
-$caretPath = 'C:\My Script\ShowLangNative\CaretLocator.cs'
-$nativePath = 'C:\My Script\ShowLangNative\NativeMethods.cs'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$sourceRoot = Join-Path $repoRoot 'src\ShowLang'
+$caretPath = Join-Path $sourceRoot 'CaretLocator.cs'
+$nativePath = Join-Path $sourceRoot 'NativeMethods.cs'
 $caretText = [IO.File]::ReadAllText($caretPath)
 $nativeText = [IO.File]::ReadAllText($nativePath)
 

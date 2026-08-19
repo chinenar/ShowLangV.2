@@ -1,4 +1,5 @@
-$path = 'C:\My Script\ShowLangNative\OverlayForm.cs'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$path = Join-Path $repoRoot 'src\ShowLang\OverlayForm.cs'
 $text = [IO.File]::ReadAllText($path)
 $pattern = '(?s)    private Point CalculateLocation\(AnchorTarget target\)\r?\n    \{.*?\r?\n    \}\r?\n\r?\n    protected override void OnPaint'
 $replacement = @'
