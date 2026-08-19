@@ -6,6 +6,7 @@ internal sealed class LanguageMonitor : IDisposable
     private readonly System.Windows.Forms.Timer _timer;
     private IntPtr? _previousLayout;
     private bool _checking;
+    private bool _paused = true;
 
     internal LanguageMonitor(OverlayForm overlay)
     {
@@ -17,15 +18,44 @@ internal sealed class LanguageMonitor : IDisposable
         _timer.Tick += (_, _) => ShowCurrent(force: false);
     }
 
+    internal bool IsPaused => _paused;
+
     internal void Start()
     {
+        Resume();
+    }
+
+    internal void Pause()
+    {
+        if (_paused)
+        {
+            return;
+        }
+
+        _paused = true;
+        _timer.Stop();
+        _previousLayout = null;
+        _overlay.HideImmediately();
+        AppLog.Write("STATE paused");
+    }
+
+    internal void Resume()
+    {
+        if (!_paused)
+        {
+            return;
+        }
+
+        _previousLayout = null;
+        _paused = false;
         ShowCurrent(force: false);
         _timer.Start();
+        AppLog.Write("STATE resumed");
     }
 
     internal void ShowCurrent(bool force)
     {
-        if (_checking)
+        if (_paused || _checking)
         {
             return;
         }
@@ -85,7 +115,9 @@ internal sealed class LanguageMonitor : IDisposable
 
     public void Dispose()
     {
+        _paused = true;
         _timer.Stop();
+        _overlay.HideImmediately();
         _timer.Dispose();
     }
 }

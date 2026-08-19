@@ -97,6 +97,12 @@ internal sealed class OverlayForm : Form
         _hideTimer.Start();
     }
 
+    internal void HideImmediately()
+    {
+        _hideTimer.Stop();
+        Hide();
+    }
+
     private Point CalculateLocation(AnchorTarget target)
     {
         Rectangle anchor = target.Bounds;
