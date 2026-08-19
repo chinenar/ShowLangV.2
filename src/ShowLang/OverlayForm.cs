@@ -111,10 +111,18 @@ internal sealed class OverlayForm : Form
         int x;
         int y;
 
+        if (TryPlaceOutsideWindowsSearch(
+                target,
+                out Point searchLocation))
+        {
+            return searchLocation;
+        }
+
         if (target.Kind == AnchorKind.Caret)
         {
             x = anchor.Right + 8;
             y = anchor.Top - Height - 6;
+
             if (y < area.Top)
             {
                 y = anchor.Bottom + 6;
@@ -140,6 +148,151 @@ internal sealed class OverlayForm : Form
         x = Math.Clamp(x, area.Left + 4, maximumX);
         y = Math.Clamp(y, area.Top + 4, maximumY);
         return new Point(x, y);
+    }
+
+    private bool TryPlaceOutsideWindowsSearch(
+        AnchorTarget target,
+        out Point location)
+    {
+        location = Point.Empty;
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(
+            foreground,
+            out uint processId);
+        if (processId == 0 || !IsWindowsSearchProcess(processId))
+        {
+            return false;
+        }
+
+        if (!NativeMethods.GetWindowRect(
+                foreground,
+                out NativeMethods.NativeRect window)
+            || window.Width <= 0
+            || window.Height <= 0)
+        {
+            return false;
+        }
+
+        Rectangle searchBounds = Rectangle.FromLTRB(
+            window.Left,
+            window.Top,
+            window.Right,
+            window.Bottom);
+        Screen searchScreen = Screen.FromRectangle(searchBounds);
+        Rectangle workingArea = searchScreen.WorkingArea;
+        Rectangle screenBounds = searchScreen.Bounds;
+
+        Rectangle anchor = target.Bounds;
+        Rectangle allowedAnchor = searchBounds;
+        allowedAnchor.Inflate(16, 16);
+        bool usableCaret = target.Kind == AnchorKind.Caret
+            && allowedAnchor.IntersectsWith(anchor);
+
+        int anchorCenterY = usableCaret
+            ? anchor.Top + (anchor.Height / 2)
+            : searchBounds.Top + Math.Min(56, searchBounds.Height / 3);
+        int sideY = anchorCenterY - (Height / 2);
+        int minimumY = Math.Max(
+            workingArea.Top + 4,
+            searchBounds.Top + 8);
+        int maximumY = Math.Min(
+            workingArea.Bottom - Height - 4,
+            searchBounds.Bottom - Height - 8);
+        if (maximumY < minimumY)
+        {
+            minimumY = workingArea.Top + 4;
+            maximumY = Math.Max(
+                minimumY,
+                workingArea.Bottom - Height - 4);
+        }
+
+        sideY = Math.Clamp(sideY, minimumY, maximumY);
+        int leftX = searchBounds.Left - Width - 8;
+        int rightX = searchBounds.Right + 8;
+        bool leftFits = leftX >= workingArea.Left + 4;
+        bool rightFits = rightX + Width <= workingArea.Right - 4;
+
+        if (leftFits || rightFits)
+        {
+            bool useLeft = leftFits;
+            if (leftFits && rightFits && usableCaret)
+            {
+                int leftDistance = Math.Abs(
+                    anchor.Left - searchBounds.Left);
+                int rightDistance = Math.Abs(
+                    searchBounds.Right - anchor.Right);
+                useLeft = leftDistance <= rightDistance;
+            }
+            else if (!leftFits)
+            {
+                useLeft = false;
+            }
+
+            location = new Point(
+                useLeft ? leftX : rightX,
+                sideY);
+            return true;
+        }
+
+        int preferredX = usableCaret
+            ? anchor.Right + 8
+            : searchBounds.Left + ((searchBounds.Width - Width) / 2);
+        int minimumX = screenBounds.Left + 4;
+        int maximumX = Math.Max(
+            minimumX,
+            screenBounds.Right - Width - 4);
+        preferredX = Math.Clamp(preferredX, minimumX, maximumX);
+
+        int aboveY = searchBounds.Top - Height - 6;
+        if (aboveY >= screenBounds.Top + 4)
+        {
+            location = new Point(preferredX, aboveY);
+            return true;
+        }
+
+        int belowY = searchBounds.Bottom + 6;
+        if (belowY + Height <= screenBounds.Bottom - 4)
+        {
+            location = new Point(preferredX, belowY);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsWindowsSearchProcess(uint processId)
+    {
+        try
+        {
+            using System.Diagnostics.Process process =
+                System.Diagnostics.Process.GetProcessById((int)processId);
+            string name = process.ProcessName;
+            return string.Equals(
+                    name,
+                    "SearchHost",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    name,
+                    "SearchApp",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    name,
+                    "StartMenuExperienceHost",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    name,
+                    "ShellExperienceHost",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
