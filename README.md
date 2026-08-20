@@ -9,6 +9,7 @@ The current native implementation replaces the original AutoHotkey script and is
 - Detects the keyboard layout of the focused input thread.
 - Displays `TH`, `EN`, `JP`, or a language identifier near the text caret.
 - Uses Win32 caret data first, then MSAA and UI Automation fallbacks.
+- Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
 - Does not steal focus and allows mouse clicks to pass through the overlay.
 - Includes tray controls for **Show test**, **Pause**, **Resume**, and **Exit**.

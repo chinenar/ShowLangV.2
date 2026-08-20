@@ -174,9 +174,19 @@ internal sealed class OverlayForm : Form
     {
         Rectangle anchor = target.Bounds;
         Screen screen = Screen.FromRectangle(anchor);
-        Rectangle area = screen.Bounds;
-        int x;
-        int y;
+
+        if (target.Kind != AnchorKind.Caret)
+        {
+            Rectangle workingArea = screen.WorkingArea;
+            int margin = ScaleValue(16);
+            return new Point(
+                Math.Max(
+                    workingArea.Left + 4,
+                    workingArea.Right - Width - margin),
+                Math.Max(
+                    workingArea.Top + 4,
+                    workingArea.Bottom - Height - margin));
+        }
 
         if (TryPlaceOutsideWindowsSearch(
                 target,
@@ -185,25 +195,18 @@ internal sealed class OverlayForm : Form
             return searchLocation;
         }
 
-        if (target.Kind == AnchorKind.Caret)
+        Rectangle area = screen.Bounds;
+        int x = anchor.Right + 8;
+        int y = anchor.Top - Height - 6;
+
+        if (y < area.Top)
         {
-            x = anchor.Right + 8;
-            y = anchor.Top - Height - 6;
-
-            if (y < area.Top)
-            {
-                y = anchor.Bottom + 6;
-            }
-
-            if (x + Width > area.Right)
-            {
-                x = anchor.Left - Width - 8;
-            }
+            y = anchor.Bottom + 6;
         }
-        else
+
+        if (x + Width > area.Right)
         {
-            x = anchor.Left + ((anchor.Width - Width) / 2);
-            y = anchor.Top + 38;
+            x = anchor.Left - Width - 8;
         }
 
         int maximumX = Math.Max(
