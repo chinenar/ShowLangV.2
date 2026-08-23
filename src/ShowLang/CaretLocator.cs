@@ -95,6 +95,7 @@ internal static class CaretLocator
             }
             else
             {
+                Invalidate(foreground);
                 return;
             }
 
@@ -125,6 +126,21 @@ internal static class CaretLocator
         }
     }
 
+    private static void Invalidate(IntPtr foreground)
+    {
+        lock (CacheGate)
+        {
+            if (_cachedWindow != foreground)
+            {
+                return;
+            }
+
+            _cachedWindow = IntPtr.Zero;
+            _cachedTarget = default;
+            _cachedAt = 0;
+        }
+    }
+
     private static bool TryGetCached(
         IntPtr foreground,
         out AnchorTarget target)
@@ -141,36 +157,11 @@ internal static class CaretLocator
 
     private static AnchorTarget CreateWindowFallback(IntPtr foreground)
     {
-        if (!NativeMethods.IsIconic(foreground)
-            && NativeMethods.GetWindowRect(
-                foreground,
-                out NativeMethods.NativeRect window)
-            && window.Width > 0
-            && window.Height > 0
-            && window.Left > -30000
-            && window.Top > -30000)
-        {
-            DrawingRectangle bounds = DrawingRectangle.FromLTRB(
-                window.Left,
-                window.Top,
-                window.Right,
-                window.Bottom);
-            bool onScreen = Screen.AllScreens.Any(
-                screen => screen.Bounds.IntersectsWith(bounds));
-            if (onScreen)
-            {
-                return new AnchorTarget(
-                    bounds,
-                    AnchorKind.Window,
-                    "Window fallback");
-            }
-        }
-
         Screen screen = Screen.FromHandle(foreground);
         return new AnchorTarget(
             screen.WorkingArea,
             AnchorKind.Window,
-            "Screen fallback");
+            "Screen corner fallback");
     }
     private static bool TryWin32Caret(
         IntPtr foreground,
@@ -294,6 +285,11 @@ internal static class CaretLocator
                 return false;
             }
 
+            if (!IsEditableTextTarget(focused, textPattern, foreground))
+            {
+                return false;
+            }
+
             TextPatternRange[] ranges = textPattern.GetSelection();
             if (ranges.Length == 0)
             {
@@ -323,6 +319,53 @@ internal static class CaretLocator
         catch (Exception exception)
         {
             AppLog.Write(exception);
+            return false;
+        }
+    }
+
+    private static bool IsEditableTextTarget(
+        AutomationElement focused,
+        TextPattern textPattern,
+        IntPtr foreground)
+    {
+        try
+        {
+            if (focused.Current.ControlType == ControlType.Edit)
+            {
+                return true;
+            }
+
+            if (focused.TryGetCurrentPattern(
+                    ValuePattern.Pattern,
+                    out object? valuePatternObject)
+                && valuePatternObject is ValuePattern valuePattern
+                && !valuePattern.Current.IsReadOnly)
+            {
+                return true;
+            }
+
+            object readOnlyValue = textPattern.DocumentRange.GetAttributeValue(
+                TextPattern.IsReadOnlyAttribute);
+            if (readOnlyValue is bool isReadOnly && !isReadOnly)
+            {
+                return true;
+            }
+
+            NativeMethods.GetWindowThreadProcessId(foreground, out uint processId);
+            if (processId == 0)
+            {
+                return false;
+            }
+
+            using System.Diagnostics.Process process =
+                System.Diagnostics.Process.GetProcessById((int)processId);
+            string name = process.ProcessName;
+            return string.Equals(name, "WindowsTerminal", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "OpenConsole", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "conhost", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
             return false;
         }
     }
