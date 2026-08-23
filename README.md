@@ -21,7 +21,7 @@ The current native implementation replaces the original AutoHotkey script and is
 ## Requirements
 
 - Windows 10 or Windows 11, x64
-- .NET 8 Desktop Runtime to run the published application
+- .NET 8 Desktop Runtime for the default framework-dependent build (not required for the portable build)
 - .NET 8 SDK to build from source
 
 ## Build and run
@@ -39,6 +39,14 @@ app\ShowLang.exe
 ```
 
 The `app` directory is intentionally excluded from Git because it contains generated binaries.
+
+For a PC without the .NET 8 Desktop Runtime, create a self-contained build:
+
+```powershell
+.\scripts\publish-portable.ps1
+```
+
+The portable files are written to `dist\portable-win-x64`. Copy the **entire folder** when deploying it; copying only `ShowLang.exe` omits native WPF and UI Automation dependencies.
 
 ## Start with Windows
 

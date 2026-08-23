@@ -26,3 +26,6 @@ app/*
 Thumbs.db
 Desktop.ini
 *.tmp
+
+# Packaged distributions
+dist/

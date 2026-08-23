@@ -22,6 +22,11 @@ internal static class LanguageNames
 
     internal static string FromLanguageId(ushort languageId)
     {
+        if (languageId == 0)
+        {
+            return "0000";
+        }
+
         if (Known.TryGetValue(languageId, out string? name))
         {
             return name;
@@ -37,7 +42,9 @@ internal static class LanguageNames
                 ? languageId.ToString("X4")
                 : iso.ToUpperInvariant();
         }
-        catch (CultureNotFoundException)
+        catch (Exception exception) when (
+            exception is CultureNotFoundException
+            or ArgumentOutOfRangeException)
         {
             return languageId.ToString("X4");
         }

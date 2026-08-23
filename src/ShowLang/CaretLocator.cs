@@ -19,8 +19,9 @@ internal readonly record struct AnchorTarget(
 
 internal static class CaretLocator
 {
-    private const int CacheLifetimeMilliseconds = 700;
+    private const int CacheLifetimeMilliseconds = 450;
     private const int AccessibleQueryIntervalMilliseconds = 120;
+    private const int MissesBeforeInvalidation = 2;
     private static readonly object CacheGate = new();
     private static IntPtr _cachedWindow;
     private static AnchorTarget _cachedTarget;
@@ -28,6 +29,8 @@ internal static class CaretLocator
     private static IntPtr _lastRequestedWindow;
     private static long _lastQueryAt;
     private static int _queryRunning;
+    private static IntPtr _missWindow;
+    private static int _consecutiveMisses;
 
     internal static void Track(IntPtr foreground)
     {
@@ -95,7 +98,7 @@ internal static class CaretLocator
             }
             else
             {
-                Invalidate(foreground);
+                RegisterMiss(foreground);
                 return;
             }
 
@@ -123,14 +126,27 @@ internal static class CaretLocator
             _cachedWindow = foreground;
             _cachedTarget = target;
             _cachedAt = Environment.TickCount64;
+            _missWindow = IntPtr.Zero;
+            _consecutiveMisses = 0;
         }
     }
 
-    private static void Invalidate(IntPtr foreground)
+    private static void RegisterMiss(IntPtr foreground)
     {
         lock (CacheGate)
         {
-            if (_cachedWindow != foreground)
+            if (_missWindow == foreground)
+            {
+                _consecutiveMisses++;
+            }
+            else
+            {
+                _missWindow = foreground;
+                _consecutiveMisses = 1;
+            }
+
+            if (_cachedWindow != foreground
+                || _consecutiveMisses < MissesBeforeInvalidation)
             {
                 return;
             }
