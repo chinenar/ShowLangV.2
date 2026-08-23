@@ -407,7 +407,18 @@ internal static class CaretLocator
             document,
             TextPatternRangeEndpoint.End) == 0;
 
-        if (IsSuspiciousCollapsedEnd(
+        bool browserCaretWorkaround = NeedsBrowserCaretWorkaround(focused);
+        if (!browserCaretWorkaround
+            && TryCaretEdge(
+                range.GetBoundingRectangles(),
+                useRightEdge: false,
+                out bounds))
+        {
+            return true;
+        }
+
+        if (browserCaretWorkaround
+            && IsSuspiciousCollapsedEnd(
                 focused,
                 range,
                 atDocumentStart,
@@ -472,6 +483,27 @@ internal static class CaretLocator
             range.GetBoundingRectangles(),
             useRightEdge: false,
             out bounds);
+    }
+
+    private static bool NeedsBrowserCaretWorkaround(
+        AutomationElement focused)
+    {
+        try
+        {
+            string className = focused.Current.ClassName;
+            return string.Equals(
+                    className,
+                    "AddressTextfieldView",
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    className,
+                    "OmniboxViewViews",
+                    StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsSuspiciousCollapsedEnd(
