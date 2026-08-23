@@ -196,17 +196,19 @@ internal sealed class OverlayForm : Form
         }
 
         Rectangle area = screen.Bounds;
-        int x = anchor.Right + 8;
-        int y = anchor.Top - Height - 6;
+        int horizontalGap = ScaleValue(8);
+        int verticalGap = ScaleValue(6);
+        int x = anchor.Right + horizontalGap;
+        int y = anchor.Top - Height - verticalGap;
 
         if (y < area.Top)
         {
-            y = anchor.Bottom + 6;
+            y = anchor.Bottom + verticalGap;
         }
 
         if (x + Width > area.Right)
         {
-            x = anchor.Left - Width - 8;
+            x = anchor.Left - Width - horizontalGap;
         }
 
         int maximumX = Math.Max(

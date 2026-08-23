@@ -322,8 +322,13 @@ internal static class CaretLocator
                 return false;
             }
 
-            return TryCollapsedRangeBounds(range, out bounds)
-                && IsPlausibleCaret(bounds, foreground);
+            if (!TryCollapsedRangeBounds(focused, textPattern, range, out bounds))
+            {
+                return false;
+            }
+
+            bounds = NormalizeAutomationCaret(bounds);
+            return IsPlausibleCaret(bounds, foreground);
         }
         catch (Exception exception) when (
             exception is ElementNotAvailableException
@@ -387,12 +392,57 @@ internal static class CaretLocator
     }
 
     private static bool TryCollapsedRangeBounds(
+        AutomationElement focused,
+        TextPattern textPattern,
         TextPatternRange range,
         out DrawingRectangle bounds)
     {
-        if (TryCaretEdge(
-                range.GetBoundingRectangles(),
+        TextPatternRange document = textPattern.DocumentRange;
+        bool atDocumentStart = range.CompareEndpoints(
+            TextPatternRangeEndpoint.Start,
+            document,
+            TextPatternRangeEndpoint.Start) == 0;
+        bool atDocumentEnd = range.CompareEndpoints(
+            TextPatternRangeEndpoint.Start,
+            document,
+            TextPatternRangeEndpoint.End) == 0;
+
+        if (IsSuspiciousCollapsedEnd(
+                focused,
+                range,
+                atDocumentStart,
+                atDocumentEnd)
+            && TryPrefixRangeEnd(document, range, out bounds))
+        {
+            return true;
+        }
+
+        // Prefer the characters adjacent to the insertion point. Chromium-based
+        // address bars can report the collapsed range at the start of the field
+        // even when the real caret is elsewhere.
+        TextPatternRange nextCharacter = range.Clone();
+        int movedForward = nextCharacter.MoveEndpointByUnit(
+            TextPatternRangeEndpoint.End,
+            TextUnit.Character,
+            1);
+        if (movedForward > 0
+            && TryCaretEdge(
+                nextCharacter.GetBoundingRectangles(),
                 useRightEdge: false,
+                out bounds))
+        {
+            return true;
+        }
+
+        TextPatternRange previousCharacter = range.Clone();
+        int movedBackward = previousCharacter.MoveEndpointByUnit(
+            TextPatternRangeEndpoint.Start,
+            TextUnit.Character,
+            -1);
+        if (movedBackward < 0
+            && TryCaretEdge(
+                previousCharacter.GetBoundingRectangles(),
+                useRightEdge: true,
                 out bounds))
         {
             return true;
@@ -417,31 +467,78 @@ internal static class CaretLocator
             return true;
         }
 
-        TextPatternRange nextCharacter = range.Clone();
-        int movedForward = nextCharacter.MoveEndpointByUnit(
-            TextPatternRangeEndpoint.End,
-            TextUnit.Character,
-            1);
-        if (movedForward > 0
-            && TryCaretEdge(
-                nextCharacter.GetBoundingRectangles(),
-                useRightEdge: false,
-                out bounds))
+        // Empty fields may expose only the collapsed caret rectangle.
+        return TryCaretEdge(
+            range.GetBoundingRectangles(),
+            useRightEdge: false,
+            out bounds);
+    }
+
+    private static bool IsSuspiciousCollapsedEnd(
+        AutomationElement focused,
+        TextPatternRange caret,
+        bool atDocumentStart,
+        bool atDocumentEnd)
+    {
+        if (!atDocumentEnd || atDocumentStart)
         {
-            return true;
+            return false;
         }
 
-        TextPatternRange previousCharacter = range.Clone();
-        int movedBackward = previousCharacter.MoveEndpointByUnit(
-            TextPatternRangeEndpoint.Start,
-            TextUnit.Character,
-            -1);
-        return movedBackward < 0
-            && TryCaretEdge(
-                previousCharacter.GetBoundingRectangles(),
-                useRightEdge: true,
-                out bounds);
+        System.Windows.Rect elementBounds = focused.Current.BoundingRectangle;
+        if (elementBounds.IsEmpty
+            || elementBounds.Height <= 0
+            || elementBounds.Height > 80)
+        {
+            return false;
+        }
+
+        foreach (System.Windows.Rect rectangle in caret.GetBoundingRectangles())
+        {
+            if (!rectangle.IsEmpty
+                && IsUsableNumber(rectangle.Left)
+                && Math.Abs(rectangle.Left - elementBounds.Left) <= 8)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
+    private static bool TryPrefixRangeEnd(
+        TextPatternRange document,
+        TextPatternRange caret,
+        out DrawingRectangle bounds)
+    {
+        TextPatternRange prefix = document.Clone();
+        prefix.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End,
+            caret,
+            TextPatternRangeEndpoint.Start);
+        return TryCaretEdge(
+            prefix.GetBoundingRectangles(),
+            useRightEdge: true,
+            out bounds);
+    }
+    private static DrawingRectangle NormalizeAutomationCaret(
+        DrawingRectangle bounds)
+    {
+        const int maximumVisualCaretHeight = 30;
+        if (bounds.Height <= maximumVisualCaretHeight)
+        {
+            return bounds;
+        }
+
+        int visualHeight = maximumVisualCaretHeight;
+        int visualTop = bounds.Top
+            + ((bounds.Height - visualHeight) / 2);
+        return new DrawingRectangle(
+            bounds.Left,
+            visualTop,
+            bounds.Width,
+            visualHeight);
+    }
+
     private static bool TryCaretEdge(
         System.Windows.Rect[] rectangles,
         bool useRightEdge,

@@ -11,6 +11,8 @@ The current native implementation replaces the original AutoHotkey script and is
 - Uses Win32 caret data first, then MSAA and UI Automation fallbacks.
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
+- Corrects Chromium-style address bars that expose the caret at the field's left edge instead of its real text position.
+- Scales the caret gap together with the selected overlay size.
 - Does not steal focus and allows mouse clicks to pass through the overlay.
 - Includes tray controls for **Show test**, **Pause**, **Resume**, and **Exit**.
 - Supports multiple overlay sizes.
