@@ -45,3 +45,10 @@ Every caret-engine change must be checked against these families:
 - No editable target -> screen-corner fallback
 
 Only promote the branch to stable when all baseline cases pass. New failures stay in experimental and must not move the stable tag.
+## Current engine-v2 rules
+
+- UI Automation candidates are accepted only when they intersect the focused editable control (10 px tolerance).
+- Focus changes invalidate the cached caret immediately; late background queries from an older focus generation cannot overwrite the new cache.
+- Empty editable controls whose provider exposes no caret rectangle anchor to the focused control's left edge instead of borrowing a virtual adjacent range.
+- Adjacent-character geometry remains a fallback only after direct collapsed geometry fails and must still stay inside the focused control.
+- TextPattern2 remains optional: some Chromium providers report the pattern query as successful while returning no usable pattern object, so it must never be the only path.

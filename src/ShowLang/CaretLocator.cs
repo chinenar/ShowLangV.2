@@ -19,10 +19,11 @@ internal readonly record struct AnchorTarget(
 
 internal static class CaretLocator
 {
-    private const int CacheLifetimeMilliseconds = 450;
+    private const int CacheLifetimeMilliseconds = 350;
     private const int AccessibleQueryIntervalMilliseconds = 120;
     private const int MissesBeforeInvalidation = 2;
     private static readonly object CacheGate = new();
+    private static long _focusGeneration;
     private static IntPtr _cachedWindow;
     private static AnchorTarget _cachedTarget;
     private static long _cachedAt;
@@ -31,6 +32,18 @@ internal static class CaretLocator
     private static int _queryRunning;
     private static IntPtr _missWindow;
     private static int _consecutiveMisses;
+
+    static CaretLocator()
+    {
+        try
+        {
+            Automation.AddAutomationFocusChangedEventHandler(
+                OnAutomationFocusChanged);
+        }
+        catch
+        {
+        }
+    }
 
     internal static void Track(IntPtr foreground)
     {
@@ -79,10 +92,14 @@ internal static class CaretLocator
             return;
         }
 
-        _ = Task.Run(() => QueryAccessibleCaret(foreground));
+        long focusGeneration = Volatile.Read(ref _focusGeneration);
+        _ = Task.Run(
+            () => QueryAccessibleCaret(foreground, focusGeneration));
     }
 
-    private static void QueryAccessibleCaret(IntPtr foreground)
+    private static void QueryAccessibleCaret(
+        IntPtr foreground,
+        long focusGeneration)
     {
         try
         {
@@ -98,15 +115,17 @@ internal static class CaretLocator
             }
             else
             {
-                RegisterMiss(foreground);
+                if (Volatile.Read(ref _focusGeneration) == focusGeneration)
+                {
+                    RegisterMiss(foreground);
+                }
                 return;
             }
 
-            if (NativeMethods.GetForegroundWindow() == foreground)
+            if (NativeMethods.GetForegroundWindow() == foreground
+                && Volatile.Read(ref _focusGeneration) == focusGeneration)
             {
-                Store(
-                    foreground,
-                    new AnchorTarget(bounds, AnchorKind.Caret, source));
+                Store(foreground, new AnchorTarget(bounds, AnchorKind.Caret, source));
             }
         }
         catch (Exception exception)
@@ -116,6 +135,23 @@ internal static class CaretLocator
         finally
         {
             Interlocked.Exchange(ref _queryRunning, 0);
+        }
+    }
+
+    private static void OnAutomationFocusChanged(
+        object source,
+        AutomationFocusChangedEventArgs eventArgs)
+    {
+        Interlocked.Increment(ref _focusGeneration);
+        lock (CacheGate)
+        {
+            _cachedWindow = IntPtr.Zero;
+            _cachedTarget = default;
+            _cachedAt = 0;
+            _missWindow = IntPtr.Zero;
+            _consecutiveMisses = 0;
+            _lastRequestedWindow = IntPtr.Zero;
+            _lastQueryAt = 0;
         }
     }
 
@@ -328,7 +364,8 @@ internal static class CaretLocator
             }
 
             bounds = NormalizeAutomationCaret(bounds);
-            return IsPlausibleCaret(bounds, foreground);
+            return IsPlausibleCaret(bounds, foreground)
+                && IsCaretInsideFocusedElement(bounds, focused);
         }
         catch (Exception exception) when (
             exception is ElementNotAvailableException
@@ -409,7 +446,8 @@ internal static class CaretLocator
 
         bool browserCaretWorkaround = NeedsBrowserCaretWorkaround(focused);
         if (!browserCaretWorkaround
-            && TryCaretEdge(
+            && TryCaretEdgeWithinFocused(
+                focused,
                 range.GetBoundingRectangles(),
                 useRightEdge: false,
                 out bounds))
@@ -423,21 +461,23 @@ internal static class CaretLocator
                 range,
                 atDocumentStart,
                 atDocumentEnd)
-            && TryPrefixRangeEnd(document, range, out bounds))
+            && TryPrefixRangeEnd(
+                focused,
+                document,
+                range,
+                out bounds))
         {
             return true;
         }
 
-        // Prefer the characters adjacent to the insertion point. Chromium-based
-        // address bars can report the collapsed range at the start of the field
-        // even when the real caret is elsewhere.
         TextPatternRange nextCharacter = range.Clone();
         int movedForward = nextCharacter.MoveEndpointByUnit(
             TextPatternRangeEndpoint.End,
             TextUnit.Character,
             1);
         if (movedForward > 0
-            && TryCaretEdge(
+            && TryCaretEdgeWithinFocused(
+                focused,
                 nextCharacter.GetBoundingRectangles(),
                 useRightEdge: false,
                 out bounds))
@@ -451,7 +491,8 @@ internal static class CaretLocator
             TextUnit.Character,
             -1);
         if (movedBackward < 0
-            && TryCaretEdge(
+            && TryCaretEdgeWithinFocused(
+                focused,
                 previousCharacter.GetBoundingRectangles(),
                 useRightEdge: true,
                 out bounds))
@@ -470,7 +511,8 @@ internal static class CaretLocator
             character,
             TextPatternRangeEndpoint.End);
         bool useRightEdge = fromEnd >= 0 || fromStart > 0;
-        if (TryCaretEdge(
+        if (TryCaretEdgeWithinFocused(
+                focused,
                 character.GetBoundingRectangles(),
                 useRightEdge,
                 out bounds))
@@ -478,13 +520,11 @@ internal static class CaretLocator
             return true;
         }
 
-        // Empty fields may expose only the collapsed caret rectangle.
-        return TryCaretEdge(
-            range.GetBoundingRectangles(),
-            useRightEdge: false,
+        return TryEmptyEditableAnchor(
+            focused,
+            document,
             out bounds);
     }
-
     private static bool NeedsBrowserCaretWorkaround(
         AutomationElement focused)
     {
@@ -538,6 +578,7 @@ internal static class CaretLocator
         return false;
     }
     private static bool TryPrefixRangeEnd(
+        AutomationElement focused,
         TextPatternRange document,
         TextPatternRange caret,
         out DrawingRectangle bounds)
@@ -547,11 +588,128 @@ internal static class CaretLocator
             TextPatternRangeEndpoint.End,
             caret,
             TextPatternRangeEndpoint.Start);
-        return TryCaretEdge(
+        return TryCaretEdgeWithinFocused(
+            focused,
             prefix.GetBoundingRectangles(),
             useRightEdge: true,
             out bounds);
     }
+    private static bool TryCaretEdgeWithinFocused(
+        AutomationElement focused,
+        System.Windows.Rect[] rectangles,
+        bool useRightEdge,
+        out DrawingRectangle bounds)
+    {
+        bounds = default;
+        System.Windows.Rect focusedBounds;
+        try
+        {
+            focusedBounds = focused.Current.BoundingRectangle;
+        }
+        catch
+        {
+            focusedBounds = System.Windows.Rect.Empty;
+        }
+
+        for (int index = rectangles.Length - 1; index >= 0; index--)
+        {
+            if (!TryCaretEdge(
+                    new[] { rectangles[index] },
+                    useRightEdge,
+                    out DrawingRectangle candidate))
+            {
+                continue;
+            }
+
+            if (focusedBounds.IsEmpty
+                || IsCaretInsideBounds(candidate, focusedBounds))
+            {
+                bounds = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryEmptyEditableAnchor(
+        AutomationElement focused,
+        TextPatternRange document,
+        out DrawingRectangle bounds)
+    {
+        bounds = default;
+        try
+        {
+            string text = document.GetText(4);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            System.Windows.Rect element = focused.Current.BoundingRectangle;
+            if (element.IsEmpty
+                || !IsUsableNumber(element.Left)
+                || !IsUsableNumber(element.Top)
+
+                || !IsUsableNumber(element.Width)
+                || !IsUsableNumber(element.Height)
+                || element.Width < 2
+                || element.Height < 4
+                || element.Height > 400)
+            {
+                return false;
+            }
+
+            int visualHeight = Math.Clamp(
+                (int)Math.Ceiling(element.Height),
+                16,
+                30);
+            int top = (int)Math.Floor(
+                element.Top + ((element.Height - visualHeight) / 2));
+            bounds = new DrawingRectangle(
+                (int)Math.Floor(element.Left),
+                top,
+                2,
+                visualHeight);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsCaretInsideFocusedElement(
+        DrawingRectangle caret,
+        AutomationElement focused)
+
+    {
+        try
+        {
+            System.Windows.Rect focusedBounds =
+                focused.Current.BoundingRectangle;
+            return focusedBounds.IsEmpty
+                || IsCaretInsideBounds(caret, focusedBounds);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool IsCaretInsideBounds(
+        DrawingRectangle caret,
+        System.Windows.Rect element)
+    {
+        DrawingRectangle allowed = DrawingRectangle.FromLTRB(
+            (int)Math.Floor(element.Left),
+            (int)Math.Floor(element.Top),
+            (int)Math.Ceiling(element.Right),
+            (int)Math.Ceiling(element.Bottom));
+        allowed.Inflate(10, 10);
+        return allowed.IntersectsWith(caret);
+    }
+
     private static DrawingRectangle NormalizeAutomationCaret(
         DrawingRectangle bounds)
     {
