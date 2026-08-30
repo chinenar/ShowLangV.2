@@ -7,6 +7,7 @@ internal sealed class LanguageMonitor : IDisposable
     private IntPtr? _previousLayout;
     private bool _checking;
     private bool _paused = true;
+    private int _stateVersion;
 
     internal LanguageMonitor(OverlayForm overlay)
     {
@@ -33,6 +34,7 @@ internal sealed class LanguageMonitor : IDisposable
         }
 
         _paused = true;
+        _stateVersion++;
         _timer.Stop();
         _previousLayout = null;
         _overlay.HideImmediately();
@@ -46,6 +48,7 @@ internal sealed class LanguageMonitor : IDisposable
             return;
         }
 
+        _stateVersion++;
         _previousLayout = null;
         _paused = false;
         ShowCurrent(force: false);
@@ -55,12 +58,18 @@ internal sealed class LanguageMonitor : IDisposable
 
     internal void ShowCurrent(bool force)
     {
+        _ = ShowCurrentAsync(force);
+    }
+
+    private async Task ShowCurrentAsync(bool force)
+    {
         if (_paused || _checking)
         {
             return;
         }
 
         _checking = true;
+        int stateVersion = _stateVersion;
         try
         {
             IntPtr foreground = NativeMethods.GetForegroundWindow();
@@ -69,7 +78,6 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
-            CaretLocator.Track(foreground);
             uint threadId = NativeMethods.GetInputThreadId(foreground);
             if (threadId == 0)
             {
@@ -92,7 +100,31 @@ internal sealed class LanguageMonitor : IDisposable
             ushort languageId = unchecked(
                 (ushort)((long)layout & 0xFFFF));
             string language = LanguageNames.FromLanguageId(languageId);
-            AnchorTarget target = CaretLocator.Locate(foreground);
+
+            // Caret/UI Automation is intentionally queried only after an
+            // actual keyboard-layout change (or an explicit Show test).
+            AnchorTarget target = await CaretLocator
+                .LocateForLanguageChangeAsync(foreground);
+
+            if (_paused || stateVersion != _stateVersion)
+            {
+                return;
+            }
+
+            if (NativeMethods.GetForegroundWindow() != foreground)
+            {
+                AppLog.Write("SHOW skipped because foreground changed");
+                return;
+            }
+
+            uint currentThreadId = NativeMethods.GetInputThreadId(foreground);
+            if (currentThreadId == 0
+                || NativeMethods.GetKeyboardLayout(currentThreadId) != layout)
+            {
+                AppLog.Write("SHOW skipped because layout changed again");
+                return;
+            }
+
             _overlay.ShowLanguage(language, target);
 
             NativeMethods.GetWindowThreadProcessId(
@@ -116,6 +148,7 @@ internal sealed class LanguageMonitor : IDisposable
     public void Dispose()
     {
         _paused = true;
+        _stateVersion++;
         _timer.Stop();
         _overlay.HideImmediately();
         _timer.Dispose();

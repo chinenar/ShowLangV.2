@@ -19,114 +19,55 @@ internal readonly record struct AnchorTarget(
 
 internal static class CaretLocator
 {
-    private const int CacheLifetimeMilliseconds = 350;
-    private const int AccessibleQueryIntervalMilliseconds = 120;
-    private const int MissesBeforeInvalidation = 2;
-    private static readonly object CacheGate = new();
-    private static long _focusGeneration;
-    private static IntPtr _cachedWindow;
-    private static AnchorTarget _cachedTarget;
-    private static long _cachedAt;
-    private static IntPtr _lastRequestedWindow;
-    private static long _lastQueryAt;
-    private static int _queryRunning;
-    private static IntPtr _missWindow;
-    private static int _consecutiveMisses;
+    private const int AccessibleQueryTimeoutMilliseconds = 100;
+    private static readonly object OneShotQueryGate = new();
+    private static Task<AnchorTarget?>? _activeOneShotQuery;
 
-    static CaretLocator()
-    {
-        try
-        {
-            Automation.AddAutomationFocusChangedEventHandler(
-                OnAutomationFocusChanged);
-        }
-        catch
-        {
-        }
-    }
-
-    internal static void Track(IntPtr foreground)
+    internal static async Task<AnchorTarget> LocateForLanguageChangeAsync(
+        IntPtr foreground)
     {
         if (TryWin32Caret(foreground, out DrawingRectangle caret))
         {
-            Store(
-                foreground,
-                new AnchorTarget(caret, AnchorKind.Caret, "Win32 caret"));
-            return;
-        }
-
-        ScheduleAccessibleQuery(foreground);
-    }
-
-    internal static AnchorTarget Locate(IntPtr foreground)
-    {
-        if (TryWin32Caret(foreground, out DrawingRectangle caret))
-        {
-            AnchorTarget target = new(
+            return new AnchorTarget(
                 caret,
                 AnchorKind.Caret,
                 "Win32 caret");
-            Store(foreground, target);
-            return target;
         }
 
-        return TryGetCached(foreground, out AnchorTarget cached)
-            ? cached
-            : CreateWindowFallback(foreground);
-    }
-
-    private static void ScheduleAccessibleQuery(IntPtr foreground)
-    {
-        long now = Environment.TickCount64;
-        bool windowChanged = foreground != _lastRequestedWindow;
-        if (!windowChanged
-            && now - _lastQueryAt < AccessibleQueryIntervalMilliseconds)
+        Task<AnchorTarget?> query;
+        lock (OneShotQueryGate)
         {
-            return;
+            if (_activeOneShotQuery is { IsCompleted: false })
+            {
+                return CreateWindowFallback(
+                    foreground,
+                    "Screen corner fallback (caret query busy)");
+            }
+
+            query = Task.Run(() => QueryAccessibleTarget(foreground));
+            _activeOneShotQuery = query;
         }
 
-        _lastRequestedWindow = foreground;
-        _lastQueryAt = now;
-        if (Interlocked.CompareExchange(ref _queryRunning, 1, 0) != 0)
-        {
-            return;
-        }
-
-        long focusGeneration = Volatile.Read(ref _focusGeneration);
-        _ = Task.Run(
-            () => QueryAccessibleCaret(foreground, focusGeneration));
-    }
-
-    private static void QueryAccessibleCaret(
-        IntPtr foreground,
-        long focusGeneration)
-    {
         try
         {
-            DrawingRectangle bounds;
-            string source;
-            if (TryMsaaCaret(foreground, out bounds))
+            AnchorTarget? target = await query
+                .WaitAsync(TimeSpan.FromMilliseconds(
+                    AccessibleQueryTimeoutMilliseconds))
+                .ConfigureAwait(false);
+            if (target is AnchorTarget found
+                && NativeMethods.GetForegroundWindow() == foreground)
             {
-                source = "MSAA caret";
+                return found;
             }
-            else if (TryAutomationCaret(foreground, out bounds))
-            {
-                source = "UI Automation caret";
-            }
-            else
-            {
-                if (Volatile.Read(ref _focusGeneration) == focusGeneration)
-                {
-                    RegisterMiss(foreground);
-                }
-                return;
-            }
-
-            if (NativeMethods.GetForegroundWindow() == foreground
-                && Volatile.Read(ref _focusGeneration) == focusGeneration)
-            {
-                Store(foreground, new AnchorTarget(bounds, AnchorKind.Caret, source));
-            }
+        }
+        catch (TimeoutException)
+        {
+            AppLog.Write(
+                $"CARET timeout after {AccessibleQueryTimeoutMilliseconds}ms "
+                + $"hwnd=0x{foreground.ToInt64():X}");
+            return CreateWindowFallback(
+                foreground,
+                "Screen corner fallback (caret timeout)");
         }
         catch (Exception exception)
         {
@@ -134,86 +75,59 @@ internal static class CaretLocator
         }
         finally
         {
-            Interlocked.Exchange(ref _queryRunning, 0);
-        }
-    }
-
-    private static void OnAutomationFocusChanged(
-        object source,
-        AutomationFocusChangedEventArgs eventArgs)
-    {
-        Interlocked.Increment(ref _focusGeneration);
-        lock (CacheGate)
-        {
-            _cachedWindow = IntPtr.Zero;
-            _cachedTarget = default;
-            _cachedAt = 0;
-            _missWindow = IntPtr.Zero;
-            _consecutiveMisses = 0;
-            _lastRequestedWindow = IntPtr.Zero;
-            _lastQueryAt = 0;
-        }
-    }
-
-    private static void Store(IntPtr foreground, AnchorTarget target)
-    {
-        lock (CacheGate)
-        {
-            _cachedWindow = foreground;
-            _cachedTarget = target;
-            _cachedAt = Environment.TickCount64;
-            _missWindow = IntPtr.Zero;
-            _consecutiveMisses = 0;
-        }
-    }
-
-    private static void RegisterMiss(IntPtr foreground)
-    {
-        lock (CacheGate)
-        {
-            if (_missWindow == foreground)
+            if (query.IsCompleted)
             {
-                _consecutiveMisses++;
+                lock (OneShotQueryGate)
+                {
+                    if (ReferenceEquals(_activeOneShotQuery, query))
+                    {
+                        _activeOneShotQuery = null;
+                    }
+                }
             }
-            else
+        }
+
+        return CreateWindowFallback(foreground);
+    }
+
+    private static AnchorTarget? QueryAccessibleTarget(
+        IntPtr foreground)
+    {
+        try
+        {
+            if (TryMsaaCaret(foreground, out DrawingRectangle bounds))
             {
-                _missWindow = foreground;
-                _consecutiveMisses = 1;
+                return new AnchorTarget(
+                    bounds,
+                    AnchorKind.Caret,
+                    "MSAA caret");
             }
 
-            if (_cachedWindow != foreground
-                || _consecutiveMisses < MissesBeforeInvalidation)
+            if (TryAutomationCaret(foreground, out bounds))
             {
-                return;
+                return new AnchorTarget(
+                    bounds,
+                    AnchorKind.Caret,
+                    "UI Automation caret");
             }
-
-            _cachedWindow = IntPtr.Zero;
-            _cachedTarget = default;
-            _cachedAt = 0;
         }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+
+        return null;
     }
 
-    private static bool TryGetCached(
+    private static AnchorTarget CreateWindowFallback(
         IntPtr foreground,
-        out AnchorTarget target)
-    {
-        lock (CacheGate)
-        {
-            bool fresh = _cachedWindow == foreground
-                && Environment.TickCount64 - _cachedAt
-                    <= CacheLifetimeMilliseconds;
-            target = fresh ? _cachedTarget : default;
-            return fresh;
-        }
-    }
-
-    private static AnchorTarget CreateWindowFallback(IntPtr foreground)
+        string source = "Screen corner fallback")
     {
         Screen screen = Screen.FromHandle(foreground);
         return new AnchorTarget(
             screen.WorkingArea,
             AnchorKind.Window,
-            "Screen corner fallback");
+            source);
     }
     private static bool TryWin32Caret(
         IntPtr foreground,

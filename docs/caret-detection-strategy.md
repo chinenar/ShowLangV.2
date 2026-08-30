@@ -52,3 +52,11 @@ Only promote the branch to stable when all baseline cases pass. New failures sta
 - Empty editable controls whose provider exposes no caret rectangle anchor to the focused control's left edge instead of borrowing a virtual adjacent range.
 - Adjacent-character geometry remains a fallback only after direct collapsed geometry fails and must still stay inside the focused control.
 - TextPattern2 remains optional: some Chromium providers report the pattern query as successful while returning no usable pattern object, so it must never be the only path.
+
+## Trigger and performance policy
+
+The 20 ms timer may poll only the foreground keyboard layout. It must not call MSAA, UI Automation, TextPattern, or caret geometry APIs while the layout is unchanged.
+
+Caret detection runs once after an actual keyboard-layout change, or after an explicit user action such as **Show test**. Win32 is attempted immediately; accessibility lookup is a single non-overlapping query with a 100 ms timeout. A slow or stuck query falls back to the active screen corner rather than starting repeated provider calls.
+
+Do not reintroduce continuous `CaretLocator.Track(...)` calls before the layout-change guard. ShowLang must not register a global UI Automation focus-changed handler merely to keep a caret cache warm.
