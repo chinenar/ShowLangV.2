@@ -19,107 +19,46 @@ internal readonly record struct AnchorTarget(
 
 internal static class CaretLocator
 {
-    private const int AccessibleQueryTimeoutMilliseconds = 100;
-    private static readonly object OneShotQueryGate = new();
-    private static Task<AnchorTarget?>? _activeOneShotQuery;
-
-    internal static async Task<AnchorTarget> LocateForLanguageChangeAsync(
-        IntPtr foreground)
+    internal static bool TryLocateNative(
+        IntPtr foreground,
+        out AnchorTarget target)
     {
         if (TryWin32Caret(foreground, out DrawingRectangle caret))
         {
-            return new AnchorTarget(
+            target = new AnchorTarget(
                 caret,
                 AnchorKind.Caret,
                 "Win32 caret");
+            return true;
         }
 
-        Task<AnchorTarget?> query;
-        lock (OneShotQueryGate)
-        {
-            if (_activeOneShotQuery is { IsCompleted: false })
-            {
-                return CreateWindowFallback(
-                    foreground,
-                    "Screen corner fallback (caret query busy)");
-            }
-
-            query = Task.Run(() => QueryAccessibleTarget(foreground));
-            _activeOneShotQuery = query;
-        }
-
-        try
-        {
-            AnchorTarget? target = await query
-                .WaitAsync(TimeSpan.FromMilliseconds(
-                    AccessibleQueryTimeoutMilliseconds))
-                .ConfigureAwait(false);
-            if (target is AnchorTarget found
-                && NativeMethods.GetForegroundWindow() == foreground)
-            {
-                return found;
-            }
-        }
-        catch (TimeoutException)
-        {
-            AppLog.Write(
-                $"CARET timeout after {AccessibleQueryTimeoutMilliseconds}ms "
-                + $"hwnd=0x{foreground.ToInt64():X}");
-            return CreateWindowFallback(
-                foreground,
-                "Screen corner fallback (caret timeout)");
-        }
-        catch (Exception exception)
-        {
-            AppLog.Write(exception);
-        }
-        finally
-        {
-            if (query.IsCompleted)
-            {
-                lock (OneShotQueryGate)
-                {
-                    if (ReferenceEquals(_activeOneShotQuery, query))
-                    {
-                        _activeOneShotQuery = null;
-                    }
-                }
-            }
-        }
-
-        return CreateWindowFallback(foreground);
+        target = default;
+        return false;
     }
 
-    private static AnchorTarget? QueryAccessibleTarget(
+    internal static AnchorTarget? QueryAccessibleTarget(
         IntPtr foreground)
     {
-        try
+        if (TryMsaaCaret(foreground, out DrawingRectangle bounds))
         {
-            if (TryMsaaCaret(foreground, out DrawingRectangle bounds))
-            {
-                return new AnchorTarget(
-                    bounds,
-                    AnchorKind.Caret,
-                    "MSAA caret");
-            }
-
-            if (TryAutomationCaret(foreground, out bounds))
-            {
-                return new AnchorTarget(
-                    bounds,
-                    AnchorKind.Caret,
-                    "UI Automation caret");
-            }
+            return new AnchorTarget(
+                bounds,
+                AnchorKind.Caret,
+                "MSAA caret");
         }
-        catch (Exception exception)
+
+        if (TryAutomationCaret(foreground, out bounds))
         {
-            AppLog.Write(exception);
+            return new AnchorTarget(
+                bounds,
+                AnchorKind.Caret,
+                "UI Automation caret");
         }
 
         return null;
     }
 
-    private static AnchorTarget CreateWindowFallback(
+    internal static AnchorTarget CreateScreenFallback(
         IntPtr foreground,
         string source = "Screen corner fallback")
     {

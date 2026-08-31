@@ -21,6 +21,14 @@ internal static class NativeMethods
     internal const int DwmwaWindowCornerPreference = 33;
     internal const int DwmwcpRound = 2;
     internal const uint ObjidCaret = 0xFFFFFFF8;
+    internal const int ObjidCaretSigned = -8;
+
+    internal const uint EventSystemForeground = 0x0003;
+    internal const uint EventObjectFocus = 0x8005;
+    internal const uint EventObjectLocationChange = 0x800B;
+    internal const uint EventObjectTextSelectionChanged = 0x8014;
+    internal const uint WineventOutOfContext = 0x0000;
+    internal const uint WineventSkipOwnProcess = 0x0002;
 
     internal const uint UlwAlpha = 0x00000002;
     internal const byte AcSrcOver = 0x00;
@@ -53,8 +61,56 @@ internal static class NativeMethods
         return threadId;
     }
 
+    internal static bool TryGetLastInput(
+        out uint inputTick,
+        out uint idleMilliseconds)
+    {
+        LastInputInfo info = new()
+        {
+            Size = (uint)Marshal.SizeOf<LastInputInfo>(),
+        };
+        if (!GetLastInputInfo(ref info))
+        {
+            inputTick = 0;
+            idleMilliseconds = 0;
+            return false;
+        }
+
+        inputTick = info.Time;
+        idleMilliseconds = unchecked(
+            (uint)Environment.TickCount - info.Time);
+        return true;
+    }
+    internal delegate void WinEventDelegate(
+        IntPtr hook,
+        uint eventType,
+        IntPtr hwnd,
+        int idObject,
+        int idChild,
+        uint eventThread,
+        uint eventTime);
+
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLastInputInfo(
+        ref LastInputInfo info);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetWinEventHook(
+        uint eventMin,
+        uint eventMax,
+        IntPtr eventHookModule,
+        WinEventDelegate callback,
+        uint processId,
+        uint threadId,
+        uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWinEvent(IntPtr hook);
 
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(
@@ -154,6 +210,12 @@ internal static class NativeMethods
         ref int value,
         int valueSize);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LastInputInfo
+    {
+        internal uint Size;
+        internal uint Time;
+    }
     [StructLayout(LayoutKind.Sequential)]
     internal struct NativePoint
     {

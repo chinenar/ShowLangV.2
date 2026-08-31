@@ -16,6 +16,7 @@ Goal: avoid site/app-specific fixes. Detect the caret by capability/provider fam
 - Terminal-like providers: expand the collapsed text range to the adjacent character only when the provider exposes no caret rectangle.
 - Browser omnibox/address-field providers: use the document-prefix edge workaround only for browser address controls whose collapsed rectangle is pinned to the control's left edge.
 - Normal web inputs, textareas and contenteditable controls: never use the browser-address workaround.
+
 ## Candidate validation
 
 A UIA caret candidate must pass all of these checks:
@@ -23,7 +24,7 @@ A UIA caret candidate must pass all of these checks:
 - It is inside the foreground window and on-screen.
 - It is inside, or within a small tolerance of, the focused editable element's bounding rectangle when that rectangle is specific enough to be useful.
 - The focused element is editable by control type, writable ValuePattern, or non-read-only text attributes.
-- Cached caret data is tied to the same focused element/runtime id and is discarded when focus changes.
+- Cached caret data is tied to the same foreground and focus generation and is discarded when focus or foreground changes.
 - A rectangle from an unrelated child, button, suggestion popup or newline is rejected.
 
 ## Confidence policy
@@ -31,6 +32,7 @@ A UIA caret candidate must pass all of these checks:
 Use one automatic mode rather than per-app settings. High-confidence sources win. Low-confidence inferred positions never override a valid direct caret. When confidence is insufficient, show the language at the screen corner instead of guessing.
 
 Do not add domain names such as Facebook, YouTube or Shopee to detection code. A workaround may key on a provider/control class only when the API behavior is reproducible across that provider family.
+
 ## Regression matrix before promotion
 
 Every caret-engine change must be checked against these families:
@@ -45,6 +47,7 @@ Every caret-engine change must be checked against these families:
 - No editable target -> screen-corner fallback
 
 Only promote the branch to stable when all baseline cases pass. New failures stay in experimental and must not move the stable tag.
+
 ## Current engine-v2 rules
 
 - UI Automation candidates are accepted only when they intersect the focused editable control (10 px tolerance).
@@ -55,8 +58,12 @@ Only promote the branch to stable when all baseline cases pass. New failures sta
 
 ## Trigger and performance policy
 
-The 20 ms timer may poll only the foreground keyboard layout. It must not call MSAA, UI Automation, TextPattern, or caret geometry APIs while the layout is unchanged.
+The 20 ms language timer may read only the foreground window and keyboard layout. A language change must never wait for MSAA, UI Automation, TextPattern, a child process, or any other cross-process accessibility call.
 
-Caret detection runs once after an actual keyboard-layout change, or after an explicit user action such as **Show test**. Win32 is attempted immediately; accessibility lookup is a single non-overlapping query with a 100 ms timeout. A slow or stuck query falls back to the active screen corner rather than starting repeated provider calls.
+The input path uses a Win32 caret immediately when available. Otherwise it reuses the last verified caret snapshot for the same foreground and focus generation; only when neither exists does it use the active monitor corner.
 
-Do not reintroduce continuous `CaretLocator.Track(...)` calls before the layout-change guard. ShowLang must not register a global UI Automation focus-changed handler merely to keep a caret cache warm.
+Accessibility recovery runs after the user has been idle, not while typing. It is isolated in a short-lived `ShowLang.exe --caret-probe` child process. New user input, a foreground change, Pause, or Exit kills that child without blocking the main overlay. A hard timeout also kills it, so a provider that never returns cannot leave ShowLang stuck in a global `query busy` state.
+
+Native WinEvent notifications invalidate stale focus data and refresh standard Win32 carets. Recovery is requested only by foreground/focus/selection/language events, not after every input sample. There is no permanent per-app blacklist and no domain-name condition in the detection core.
+
+Do not reintroduce UI Automation on the language-change path, continuous caret warming, or a global managed UI Automation focus handler in the main process.

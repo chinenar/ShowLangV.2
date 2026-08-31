@@ -8,7 +8,9 @@ The current native implementation replaces the original AutoHotkey script and is
 
 - Detects the keyboard layout of the focused input thread.
 - Displays `TH`, `EN`, `JP`, or a language identifier near the text caret.
-- Uses Win32 caret data first, then MSAA and UI Automation fallbacks.
+- Uses Win32 caret data immediately and reuses the last verified caret snapshot when a provider is temporarily unavailable.
+- Keeps MSAA and UI Automation off the language-switch path; accessibility recovery runs only after input becomes idle in a disposable child process.
+- Cancels a recovery probe as soon as new user input resumes, so a slow provider cannot leave the main overlay in a global busy state.
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
 - Corrects Chromium-style address bars that expose the caret at the field's left edge instead of its real text position.
