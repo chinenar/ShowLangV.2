@@ -7,6 +7,12 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (CaretWorkerMode.TryRun(args))
+        {
+            // The worker owns no tray UI and exits with its parent pipe.
+            Environment.Exit(0);
+            return;
+        }
         if (CaretProbeMode.TryRun(args))
         {
             // UI Automation can create COM worker threads that outlive Main.

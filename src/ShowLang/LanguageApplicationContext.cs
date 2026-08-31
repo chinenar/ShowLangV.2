@@ -4,7 +4,7 @@ internal sealed class LanguageApplicationContext : ApplicationContext
 {
     private readonly ShowLangSettings _settings;
     private readonly OverlayForm _overlay;
-    private readonly CaretTracker _caretTracker;
+    private readonly CaretWorkerClient _caretWorker;
     private readonly LanguageMonitor _monitor;
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _showTestItem;
@@ -18,8 +18,8 @@ internal sealed class LanguageApplicationContext : ApplicationContext
     {
         _settings = ShowLangSettings.Load();
         _overlay = new OverlayForm(_settings);
-        _caretTracker = new CaretTracker(_overlay);
-        _monitor = new LanguageMonitor(_overlay, _caretTracker);
+        _caretWorker = new CaretWorkerClient();
+        _monitor = new LanguageMonitor(_overlay, _caretWorker);
 
         _previewTimer = new System.Windows.Forms.Timer
         {
@@ -200,7 +200,7 @@ internal sealed class LanguageApplicationContext : ApplicationContext
         _previewTimer.Stop();
         _previewTimer.Dispose();
         _monitor.Dispose();
-        _caretTracker.Dispose();
+        _caretWorker.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.ContextMenuStrip?.Dispose();
         _trayIcon.Dispose();

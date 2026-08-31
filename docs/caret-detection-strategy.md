@@ -24,7 +24,7 @@ A UIA caret candidate must pass all of these checks:
 - It is inside the foreground window and on-screen.
 - It is inside, or within a small tolerance of, the focused editable element's bounding rectangle when that rectangle is specific enough to be useful.
 - The focused element is editable by control type, writable ValuePattern, or non-read-only text attributes.
-- Cached caret data is tied to the same foreground and focus generation and is discarded when focus or foreground changes.
+- The result is accepted only for the foreground window and keyboard layout that triggered the request; late results are discarded.
 - A rectangle from an unrelated child, button, suggestion popup or newline is rejected.
 
 ## Confidence policy
@@ -51,19 +51,19 @@ Only promote the branch to stable when all baseline cases pass. New failures sta
 ## Current engine-v2 rules
 
 - UI Automation candidates are accepted only when they intersect the focused editable control (10 px tolerance).
-- Focus changes invalidate the cached caret immediately; late background queries from an older focus generation cannot overwrite the new cache.
+- Every accessibility lookup is fresh and belongs to an actual language-change event; caret positions are not warmed or retained in the background.
 - Empty editable controls whose provider exposes no caret rectangle anchor to the focused control's left edge instead of borrowing a virtual adjacent range.
 - Adjacent-character geometry remains a fallback only after direct collapsed geometry fails and must still stay inside the focused control.
 - TextPattern2 remains optional: some Chromium providers report the pattern query as successful while returning no usable pattern object, so it must never be the only path.
-
+- Rapid switches in the same foreground window are coalesced so only the newest language is shown.
 ## Trigger and performance policy
 
-The 20 ms language timer may read only the foreground window and keyboard layout. A language change must never wait for MSAA, UI Automation, TextPattern, a child process, or any other cross-process accessibility call.
+The 20 ms timer may read only the foreground window, focused input thread, and keyboard layout while the layout is unchanged. It must not call MSAA, UI Automation, TextPattern, caret geometry APIs, or background caret tracking.
 
-The input path uses a Win32 caret immediately when available. Otherwise it reuses the last verified caret snapshot for the same foreground and focus generation; only when neither exists does it use the active monitor corner.
+When the layout actually changes, ShowLang waits 45 ms for the Windows language switch to settle, tries the inexpensive Win32 caret, then sends at most one request to a preloaded `ShowLang.exe --caret-worker` process. The worker is blocked on a pipe between requests and performs no caret inspection while idle.
 
-Accessibility recovery runs after the user has been idle, not while typing. It is isolated in a short-lived `ShowLang.exe --caret-probe` child process. New user input, a foreground change, Pause, or Exit kills that child without blocking the main overlay. A hard timeout also kills it, so a provider that never returns cannot leave ShowLang stuck in a global `query busy` state.
+A worker response is accepted only while the same foreground window and keyboard layout are still current. Rapid changes in the same window are coalesced and only the newest language is displayed. If a provider fails or exceeds 180 ms, ShowLang terminates and recreates only the worker, then uses the screen-corner fallback for that event.
 
-Native WinEvent notifications invalidate stale focus data and refresh standard Win32 carets. Recovery is requested only by foreground/focus/selection/language events, not after every input sample. There is no permanent per-app blacklist and no domain-name condition in the detection core.
+There is no caret cache, idle recovery timer, WinEvent hook, per-app blacklist, or domain-name condition in the normal engine. Pause and Exit stop the worker together with language monitoring.
 
-Do not reintroduce UI Automation on the language-change path, continuous caret warming, or a global managed UI Automation focus handler in the main process.
+Do not reintroduce continuous caret warming or accessibility calls before the layout-change guard.
