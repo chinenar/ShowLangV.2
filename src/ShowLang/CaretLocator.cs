@@ -1,3 +1,4 @@
+using System.Text;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
@@ -68,6 +69,168 @@ internal static class CaretLocator
             AnchorKind.Window,
             source);
     }
+
+    internal static bool HasEditableProxy(IntPtr foreground)
+    {
+        return TryFindEditableProxyRect(foreground, out _);
+    }
+
+    internal static bool TryLocateEditableProxyTarget(
+        IntPtr foreground,
+        out AnchorTarget target,
+        out int horizontalOffset)
+    {
+        target = default;
+        horizontalOffset = 0;
+        if (!NativeMethods.GetCursorPos(
+                out NativeMethods.NativePoint pointer)
+            || !TryFindEditableProxyRect(
+                foreground,
+                out NativeMethods.NativeRect proxyRect)
+            || pointer.X < proxyRect.Left
+            || pointer.X >= proxyRect.Right
+            || pointer.Y < proxyRect.Top
+            || pointer.Y >= proxyRect.Bottom)
+        {
+            return false;
+        }
+
+        horizontalOffset = Math.Clamp(
+            pointer.X - proxyRect.Left,
+            Math.Min(12, proxyRect.Width / 4),
+            Math.Max(
+                Math.Min(12, proxyRect.Width / 4),
+                proxyRect.Width - Math.Min(12, proxyRect.Width / 4)));
+        target = CreateEditableProxyTarget(
+            foreground,
+            proxyRect,
+            horizontalOffset);
+        return target.Bounds.Width > 0;
+    }
+
+    internal static bool TryLocateEditableProxyTarget(
+        IntPtr foreground,
+        int horizontalOffset,
+        out AnchorTarget target)
+    {
+        target = default;
+        if (!TryFindEditableProxyRect(
+                foreground,
+                out NativeMethods.NativeRect proxyRect))
+        {
+            return false;
+        }
+
+        int margin = Math.Min(12, proxyRect.Width / 4);
+        int offset = Math.Clamp(
+            horizontalOffset,
+            margin,
+            Math.Max(margin, proxyRect.Width - margin));
+        target = CreateEditableProxyTarget(
+            foreground,
+            proxyRect,
+            offset);
+        return target.Bounds.Width > 0;
+    }
+
+    private static AnchorTarget CreateEditableProxyTarget(
+        IntPtr foreground,
+        NativeMethods.NativeRect proxyRect,
+        int horizontalOffset)
+    {
+        if (proxyRect.Width < 24 || proxyRect.Height < 16)
+        {
+            return default;
+        }
+
+        int height = Math.Clamp(proxyRect.Height - 8, 16, 30);
+        int top = proxyRect.Top + ((proxyRect.Height - height) / 2);
+        DrawingRectangle bounds = new(
+            proxyRect.Left + horizontalOffset,
+            top,
+            2,
+            height);
+        if (!IsPlausibleCaret(bounds, foreground))
+        {
+            return default;
+        }
+
+        return new AnchorTarget(
+            bounds,
+            AnchorKind.Caret,
+            "Editable proxy caret");
+    }
+
+    private static bool TryFindEditableProxyRect(
+        IntPtr foreground,
+        out NativeMethods.NativeRect proxyRect)
+    {
+        proxyRect = default;
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(
+            foreground,
+            out uint foregroundProcessId);
+        if (foregroundProcessId == 0)
+        {
+            return false;
+        }
+
+        bool found = false;
+        NativeMethods.NativeRect candidate = default;
+        NativeMethods.EnumChildWindows(
+            foreground,
+            (window, _) =>
+            {
+                if (!NativeMethods.IsWindowVisible(window))
+                {
+                    return true;
+                }
+
+                NativeMethods.GetWindowThreadProcessId(
+                    window,
+                    out uint processId);
+                if (processId != foregroundProcessId
+                    || !NativeMethods.GetWindowRect(window, out var rect)
+                    || rect.Width < 24
+                    || rect.Height < 16)
+                {
+                    return true;
+                }
+
+                StringBuilder className = new(128);
+                NativeMethods.GetClassName(
+                    window,
+                    className,
+                    className.Capacity);
+                if (!IsEditableProxyClass(className.ToString()))
+                {
+                    return true;
+                }
+
+                candidate = rect;
+                found = true;
+                return false;
+            },
+            IntPtr.Zero);
+        if (found)
+        {
+            proxyRect = candidate;
+        }
+        return found;
+    }
+
+    private static bool IsEditableProxyClass(string className)
+    {
+        return string.Equals(
+            className,
+            "FilterControlGlassWindow",
+            StringComparison.Ordinal);
+    }
+
     private static bool TryWin32Caret(
         IntPtr foreground,
         out DrawingRectangle bounds)

@@ -15,6 +15,7 @@ The current native implementation replaces the original AutoHotkey script and is
 - Coalesces rapid layout switches and restarts only the worker if an accessibility provider times out.
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
+- Handles inaccessible text-field proxy windows by remembering the clicked field-relative anchor without requiring ShowLang to run elevated.
 - Corrects Chromium-style address bars that expose the caret at the field's left edge instead of its real text position.
 - Scales the caret gap together with the selected overlay size.
 - Does not steal focus and allows mouse clicks to pass through the overlay.

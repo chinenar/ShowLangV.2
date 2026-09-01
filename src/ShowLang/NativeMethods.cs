@@ -1,3 +1,4 @@
+using System.Text;
 using System.Runtime.InteropServices;
 
 namespace ShowLangNative;
@@ -7,6 +8,7 @@ internal static class NativeMethods
     internal static readonly IntPtr HwndTopMost = new(-1);
 
     internal const int SwShowNoActivate = 4;
+    internal const int VkLeftButton = 0x01;
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
     internal const uint SwpNoOwnerZOrder = 0x0200;
@@ -56,6 +58,9 @@ internal static class NativeMethods
         return threadId;
     }
 
+    internal delegate bool EnumWindowDelegate(
+        IntPtr hWnd,
+        IntPtr lParam);
     internal delegate void WinEventDelegate(
         IntPtr hook,
         uint eventType,
@@ -79,6 +84,28 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnhookWinEvent(IntPtr hook);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool EnumChildWindows(
+        IntPtr parent,
+        EnumWindowDelegate callback,
+        IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetClassName(
+        IntPtr hWnd,
+        StringBuilder className,
+        int maximumCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    internal static extern short GetAsyncKeyState(int virtualKey);
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
 

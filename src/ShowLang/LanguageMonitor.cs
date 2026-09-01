@@ -29,6 +29,11 @@ internal sealed class LanguageMonitor : IDisposable
     private IntPtr _lastFocusLayout;
     private Rectangle _lastFocusBounds;
     private long _lastFocusShownAt;
+    private IntPtr _proxyForeground;
+    private bool _foregroundHasEditableProxy;
+    private bool _proxyLeftButtonWasDown;
+    private bool _proxyFieldActive;
+    private int _proxyHorizontalOffset;
 
     internal LanguageMonitor(
         OverlayForm overlay,
@@ -71,6 +76,7 @@ internal sealed class LanguageMonitor : IDisposable
         StopFocusMonitoring(interruptQuery: true);
         _timer.Stop();
         _previousLayout = null;
+        ResetEditableProxyTracking();
         _worker.Stop();
         _overlay.HideImmediately();
         AppLog.Write("STATE paused");
@@ -84,6 +90,7 @@ internal sealed class LanguageMonitor : IDisposable
         }
 
         _previousLayout = null;
+        ResetEditableProxyTracking();
         _paused = false;
         _worker.Start();
         InstallFocusHook();
@@ -107,6 +114,8 @@ internal sealed class LanguageMonitor : IDisposable
             {
                 return;
             }
+
+            CheckEditableProxyClick(foreground);
 
             uint threadId = NativeMethods.GetInputThreadId(foreground);
             if (threadId == 0)
@@ -137,6 +146,16 @@ internal sealed class LanguageMonitor : IDisposable
                 foreground,
                 layout,
                 LanguageNames.FromLanguageId(languageId));
+
+            if (TryGetEditableProxyLanguageTarget(
+                    foreground,
+                    out AnchorTarget proxyTarget))
+            {
+                _pending = null;
+                Show(change, proxyTarget);
+                Interlocked.Exchange(ref _languageRequestActive, 0);
+                return;
+            }
 
             if (CaretLocator.TryLocateNative(
                     foreground,
@@ -259,6 +278,116 @@ internal sealed class LanguageMonitor : IDisposable
                 Interlocked.Exchange(ref _languageRequestActive, 0);
             }
         }
+    }
+
+    private void CheckEditableProxyClick(IntPtr foreground)
+    {
+        if (_proxyForeground != foreground)
+        {
+            _proxyForeground = foreground;
+            _foregroundHasEditableProxy =
+                CaretLocator.HasEditableProxy(foreground);
+            _proxyLeftButtonWasDown = false;
+            _proxyFieldActive = false;
+            _proxyHorizontalOffset = 0;
+        }
+
+        if (!_foregroundHasEditableProxy)
+        {
+            return;
+        }
+
+        short state = NativeMethods.GetAsyncKeyState(
+            NativeMethods.VkLeftButton);
+        bool isDown = (state & 0x8000) != 0;
+        bool clickCompleted = !isDown
+            && (_proxyLeftButtonWasDown || (state & 0x0001) != 0);
+        _proxyLeftButtonWasDown = isDown;
+        if (!clickCompleted)
+        {
+            return;
+        }
+
+        if (!CaretLocator.TryLocateEditableProxyTarget(
+                foreground,
+                out AnchorTarget target,
+                out int horizontalOffset))
+        {
+            _proxyFieldActive = false;
+            _proxyHorizontalOffset = 0;
+            return;
+        }
+
+        _proxyFieldActive = true;
+        _proxyHorizontalOffset = horizontalOffset;
+
+        uint threadId = NativeMethods.GetInputThreadId(foreground);
+        if (threadId == 0)
+        {
+            return;
+        }
+
+        IntPtr layout = NativeMethods.GetKeyboardLayout(threadId);
+        ushort languageId = unchecked(
+            (ushort)((long)layout & 0xFFFF));
+        LanguageChange change = new(
+            0,
+            foreground,
+            layout,
+            LanguageNames.FromLanguageId(languageId));
+        if (IsDuplicateFocusShow(change, target))
+        {
+            return;
+        }
+
+        Show(
+            change,
+            target with
+            {
+                Source = "Focus " + target.Source,
+            });
+    }
+
+    private bool TryGetEditableProxyLanguageTarget(
+        IntPtr foreground,
+        out AnchorTarget target)
+    {
+        target = default;
+        if (!_foregroundHasEditableProxy
+            || _proxyForeground != foreground)
+        {
+            return false;
+        }
+
+        if (_proxyFieldActive
+            && CaretLocator.TryLocateEditableProxyTarget(
+                foreground,
+                _proxyHorizontalOffset,
+                out target))
+        {
+            return true;
+        }
+
+        if (!CaretLocator.TryLocateEditableProxyTarget(
+                foreground,
+                out target,
+                out int horizontalOffset))
+        {
+            return false;
+        }
+
+        _proxyFieldActive = true;
+        _proxyHorizontalOffset = horizontalOffset;
+        return true;
+    }
+
+    private void ResetEditableProxyTracking()
+    {
+        _proxyForeground = IntPtr.Zero;
+        _foregroundHasEditableProxy = false;
+        _proxyLeftButtonWasDown = false;
+        _proxyFieldActive = false;
+        _proxyHorizontalOffset = 0;
     }
 
     private void InstallFocusHook()

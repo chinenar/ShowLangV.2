@@ -16,6 +16,7 @@ Goal: avoid site/app-specific fixes. Detect the caret by capability/provider fam
 - Terminal-like providers: expand the collapsed text range to the adjacent character only when the provider exposes no caret rectangle.
 - Browser omnibox/address-field providers: use the document-prefix edge workaround only for browser address controls whose collapsed rectangle is pinned to the control's left edge.
 - Normal web inputs, textareas and contenteditable controls: never use the browser-address workaround.
+- Inaccessible text-field proxy windows: a recognized provider/control class may expose only the field bounds while the real elevated/protected text element is inaccessible. Record the field-relative horizontal anchor only after a real click inside that proxy and reuse it while that foreground/field remains active; never key this fallback on an application process name.
 
 ## Candidate validation
 
@@ -58,12 +59,12 @@ Only promote the branch to stable when all baseline cases pass. New failures sta
 - Rapid switches in the same foreground window are coalesced so only the newest language is shown.
 ## Trigger and performance policy
 
-The 20 ms timer may read only the foreground window, focused input thread, and keyboard layout while the layout is unchanged. It must not call MSAA, UI Automation, TextPattern, caret geometry APIs, or background caret tracking.
+The 50 ms timer may read only the foreground window, focused input thread, and keyboard layout while the layout is unchanged. It must not call MSAA, UI Automation, TextPattern, caret geometry APIs, or background caret tracking.
 
 When the layout actually changes, ShowLang waits 45 ms for the Windows language switch to settle, tries the inexpensive Win32 caret, then sends at most one request to a preloaded `ShowLang.exe --caret-worker` process. The worker is blocked on a pipe between requests and performs no caret inspection while idle.
 
 A worker response is accepted only while the same foreground window and keyboard layout are still current. Rapid changes in the same window are coalesced and only the newest language is displayed. If a provider fails or exceeds 180 ms, ShowLang terminates and recreates only the worker, then uses the screen-corner fallback for that event.
 
-There is no caret cache, idle recovery timer, per-app blacklist, or domain-name condition in the normal engine. A lightweight `EVENT_OBJECT_FOCUS` WinEvent hook is used only to request one debounced lookup when focus enters a new control. If the focused target is not editable or exposes no caret, the focus event is ignored rather than showing the screen-corner fallback. Pause and Exit stop the worker together with language monitoring.
+There is no caret cache, idle recovery timer, per-app blacklist, or domain-name condition in the normal engine. A lightweight `EVENT_OBJECT_FOCUS` WinEvent hook is used only to request one debounced lookup when focus enters a new control. If the focused target is not editable or exposes no caret, the focus event is ignored rather than showing the screen-corner fallback. Only while the current foreground exposes a recognized inaccessible text-field proxy may the existing 50 ms timer also read `GetAsyncKeyState(VK_LBUTTON)` to detect an actual click into that proxy; it must not poll UI Automation or caret geometry. The relative proxy anchor is cleared when foreground changes, Pause, or Resume. Pause and Exit stop the worker together with language monitoring.
 
 Do not reintroduce continuous caret warming or accessibility calls before the layout-change guard.
