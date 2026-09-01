@@ -61,6 +61,32 @@ internal sealed class CaretWorkerClient : IDisposable
         worker?.Dispose();
     }
 
+    internal void InterruptCurrentQuery()
+    {
+        WorkerConnection? worker;
+        bool restart;
+        lock (_stateGate)
+        {
+            if (_disposed || !_enabled)
+            {
+                return;
+            }
+
+            worker = _worker;
+            _worker = null;
+            restart = worker is not null;
+        }
+
+        if (worker is not null)
+        {
+            _ = Task.Run(worker.Dispose);
+        }
+
+        if (restart)
+        {
+            _ = WarmUpAsync();
+        }
+    }
     internal async Task<AnchorTarget?> QueryAsync(IntPtr foreground)
     {
         if (foreground == IntPtr.Zero

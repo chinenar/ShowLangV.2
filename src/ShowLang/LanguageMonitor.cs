@@ -3,29 +3,51 @@ namespace ShowLangNative;
 internal sealed class LanguageMonitor : IDisposable
 {
     private const int CaretCaptureDelayMilliseconds = 45;
+    private const int FocusCaptureDelayMilliseconds = 70;
+    private const int FocusSuppressionMilliseconds = 300;
+    private const int DuplicateFocusWindowMilliseconds = 350;
 
     private readonly OverlayForm _overlay;
     private readonly CaretWorkerClient _worker;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly System.Threading.Timer _focusTimer;
+    private readonly NativeMethods.WinEventDelegate _focusCallback;
 
     private IntPtr? _previousLayout;
     private LanguageChange? _pending;
+    private IntPtr _focusHook;
     private bool _checking;
     private bool _processing;
     private bool _paused = true;
+    private bool _disposed;
     private long _sequence;
+    private long _focusSequence;
+    private long _suppressFocusUntil;
+    private int _focusQueryActive;
+    private int _languageRequestActive;
+    private IntPtr _lastFocusWindow;
+    private IntPtr _lastFocusLayout;
+    private Rectangle _lastFocusBounds;
+    private long _lastFocusShownAt;
 
     internal LanguageMonitor(
         OverlayForm overlay,
         CaretWorkerClient worker)
     {
         _overlay = overlay;
+        _ = _overlay.Handle;
         _worker = worker;
+        _focusCallback = OnFocusChanged;
         _timer = new System.Windows.Forms.Timer
         {
             Interval = 50,
         };
         _timer.Tick += (_, _) => ShowCurrent(force: false);
+        _focusTimer = new System.Threading.Timer(
+            _ => FocusTimerElapsed(),
+            null,
+            Timeout.Infinite,
+            Timeout.Infinite);
     }
 
     internal bool IsPaused => _paused;
@@ -45,6 +67,8 @@ internal sealed class LanguageMonitor : IDisposable
         _paused = true;
         _sequence++;
         _pending = null;
+        Interlocked.Exchange(ref _languageRequestActive, 0);
+        StopFocusMonitoring(interruptQuery: true);
         _timer.Stop();
         _previousLayout = null;
         _worker.Stop();
@@ -54,7 +78,7 @@ internal sealed class LanguageMonitor : IDisposable
 
     internal void Resume()
     {
-        if (!_paused)
+        if (!_paused || _disposed)
         {
             return;
         }
@@ -62,6 +86,7 @@ internal sealed class LanguageMonitor : IDisposable
         _previousLayout = null;
         _paused = false;
         _worker.Start();
+        InstallFocusHook();
         ShowCurrent(force: false);
         _timer.Start();
         AppLog.Write("STATE resumed");
@@ -69,7 +94,7 @@ internal sealed class LanguageMonitor : IDisposable
 
     internal void ShowCurrent(bool force)
     {
-        if (_paused || _checking)
+        if (IsInactive || _checking)
         {
             return;
         }
@@ -102,6 +127,9 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
+            Interlocked.Exchange(ref _languageRequestActive, 1);
+            CancelFocusForLanguageChange();
+
             ushort languageId = unchecked(
                 (ushort)((long)layout & 0xFFFF));
             LanguageChange change = new(
@@ -116,11 +144,10 @@ internal sealed class LanguageMonitor : IDisposable
             {
                 _pending = null;
                 Show(change, native);
+                Interlocked.Exchange(ref _languageRequestActive, 0);
                 return;
             }
 
-            // Accessibility work starts only for this actual language
-            // change. No caret cache is warmed while the user is idle.
             _pending = change;
             if (!_processing)
             {
@@ -130,6 +157,10 @@ internal sealed class LanguageMonitor : IDisposable
         catch (Exception exception)
         {
             AppLog.Write(exception);
+            if (!_processing && _pending is null)
+            {
+                Interlocked.Exchange(ref _languageRequestActive, 0);
+            }
         }
         finally
         {
@@ -147,11 +178,11 @@ internal sealed class LanguageMonitor : IDisposable
         _processing = true;
         try
         {
-            while (!_paused && _pending is LanguageChange change)
+            while (!IsInactive && _pending is LanguageChange change)
             {
                 _pending = null;
                 await Task.Delay(CaretCaptureDelayMilliseconds);
-                if (_paused)
+                if (IsInactive)
                 {
                     return;
                 }
@@ -173,7 +204,7 @@ internal sealed class LanguageMonitor : IDisposable
                 AnchorTarget? accessible =
                     await _worker.QueryAsync(change.Foreground);
 
-                if (_paused)
+                if (IsInactive)
                 {
                     return;
                 }
@@ -184,15 +215,11 @@ internal sealed class LanguageMonitor : IDisposable
                     {
                         if (accessible is not null)
                         {
-                            // A valid caret from the same focused field can
-                            // be reused for the newest rapid layout switch.
                             change = newer;
                             _pending = null;
                         }
                         else
                         {
-                            // The switcher may temporarily own focus. Retry
-                            // only for the newer language-change event.
                             _pending = newer;
                             continue;
                         }
@@ -223,11 +250,276 @@ internal sealed class LanguageMonitor : IDisposable
         finally
         {
             _processing = false;
-            if (!_paused && _pending is not null)
+            if (!IsInactive && _pending is not null)
             {
                 _ = ProcessPendingAsync();
             }
+            else
+            {
+                Interlocked.Exchange(ref _languageRequestActive, 0);
+            }
         }
+    }
+
+    private void InstallFocusHook()
+    {
+        if (_focusHook != IntPtr.Zero || IsInactive)
+        {
+            return;
+        }
+
+        _focusHook = NativeMethods.SetWinEventHook(
+            NativeMethods.EventObjectFocus,
+            NativeMethods.EventObjectFocus,
+            IntPtr.Zero,
+            _focusCallback,
+            0,
+            0,
+            NativeMethods.WineventOutOfContext
+                | NativeMethods.WineventSkipOwnProcess);
+
+        if (_focusHook == IntPtr.Zero)
+        {
+            AppLog.Write("FOCUS hook installation failed");
+        }
+    }
+
+    private void StopFocusMonitoring(bool interruptQuery)
+    {
+        Interlocked.Increment(ref _focusSequence);
+        try
+        {
+            _focusTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (_focusHook != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWinEvent(_focusHook);
+            _focusHook = IntPtr.Zero;
+        }
+
+        if (interruptQuery
+            && Volatile.Read(ref _focusQueryActive) != 0)
+        {
+            _worker.InterruptCurrentQuery();
+        }
+    }
+
+    private void CancelFocusForLanguageChange()
+    {
+        Volatile.Write(
+            ref _suppressFocusUntil,
+            Environment.TickCount64 + FocusSuppressionMilliseconds);
+        Interlocked.Increment(ref _focusSequence);
+        try
+        {
+            _focusTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (Volatile.Read(ref _focusQueryActive) != 0)
+        {
+            _worker.InterruptCurrentQuery();
+        }
+    }
+
+    private void OnFocusChanged(
+        IntPtr hook,
+        uint eventType,
+        IntPtr hWnd,
+        int idObject,
+        int idChild,
+        uint eventThread,
+        uint eventTime)
+    {
+        if (eventType != NativeMethods.EventObjectFocus
+            || IsInactive
+            || Environment.TickCount64
+                < Volatile.Read(ref _suppressFocusUntil))
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _focusSequence);
+        try
+        {
+            _focusTimer.Change(
+                FocusCaptureDelayMilliseconds,
+                Timeout.Infinite);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void FocusTimerElapsed()
+    {
+        long sequence = Volatile.Read(ref _focusSequence);
+        _ = ProcessFocusAsync(sequence);
+    }
+
+    private async Task ProcessFocusAsync(long sequence)
+    {
+        if (IsInactive
+            || Volatile.Read(ref _languageRequestActive) != 0
+            || Interlocked.CompareExchange(
+                ref _focusQueryActive,
+                1,
+                0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!IsFocusRequestCurrent(sequence))
+            {
+                return;
+            }
+
+            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            if (foreground == IntPtr.Zero)
+            {
+                return;
+            }
+
+            uint threadId = NativeMethods.GetInputThreadId(foreground);
+            if (threadId == 0)
+            {
+                return;
+            }
+
+            IntPtr layout = NativeMethods.GetKeyboardLayout(threadId);
+            ushort languageId = unchecked(
+                (ushort)((long)layout & 0xFFFF));
+            LanguageChange change = new(
+                0,
+                foreground,
+                layout,
+                LanguageNames.FromLanguageId(languageId));
+
+            if (CaretLocator.TryLocateNative(
+                    foreground,
+                    out AnchorTarget native))
+            {
+                PostFocusShow(sequence, change, native);
+                return;
+            }
+
+            AnchorTarget? accessible =
+                await _worker.QueryAsync(foreground)
+                    .ConfigureAwait(false);
+            if (accessible is not null)
+            {
+                PostFocusShow(sequence, change, accessible.Value);
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _focusQueryActive, 0);
+            long latest = Volatile.Read(ref _focusSequence);
+            if (!IsInactive
+                && latest != sequence
+                && Volatile.Read(ref _languageRequestActive) == 0
+                && Environment.TickCount64
+                    >= Volatile.Read(ref _suppressFocusUntil))
+            {
+                try
+                {
+                    _focusTimer.Change(
+                        FocusCaptureDelayMilliseconds,
+                        Timeout.Infinite);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+    }
+
+    private bool IsFocusRequestCurrent(long sequence)
+    {
+        return !IsInactive
+            && sequence == Volatile.Read(ref _focusSequence)
+            && Volatile.Read(ref _languageRequestActive) == 0
+            && Environment.TickCount64
+                >= Volatile.Read(ref _suppressFocusUntil);
+    }
+
+    private void PostFocusShow(
+        long sequence,
+        LanguageChange change,
+        AnchorTarget target)
+    {
+        if (!IsFocusRequestCurrent(sequence)
+            || !IsStillCurrent(change)
+            || _overlay.IsDisposed
+            || !_overlay.IsHandleCreated)
+        {
+            return;
+        }
+
+        void ShowOnUiThread()
+        {
+            if (!IsFocusRequestCurrent(sequence)
+                || !IsStillCurrent(change)
+                || IsDuplicateFocusShow(change, target))
+            {
+                return;
+            }
+
+            AnchorTarget focusTarget = target with
+            {
+                Source = "Focus " + target.Source,
+            };
+            Show(change, focusTarget);
+        }
+
+        try
+        {
+            if (_overlay.InvokeRequired)
+            {
+                _overlay.BeginInvoke((Action)ShowOnUiThread);
+            }
+            else
+            {
+                ShowOnUiThread();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private bool IsDuplicateFocusShow(
+        LanguageChange change,
+        AnchorTarget target)
+    {
+        long now = Environment.TickCount64;
+        bool duplicate = _lastFocusWindow == change.Foreground
+            && _lastFocusLayout == change.Layout
+            && _lastFocusBounds == target.Bounds
+            && now - _lastFocusShownAt
+                <= DuplicateFocusWindowMilliseconds;
+
+        if (!duplicate)
+        {
+            _lastFocusWindow = change.Foreground;
+            _lastFocusLayout = change.Layout;
+            _lastFocusBounds = target.Bounds;
+            _lastFocusShownAt = now;
+        }
+
+        return duplicate;
     }
 
     private static bool IsStillCurrent(LanguageChange change)
@@ -256,15 +548,27 @@ internal sealed class LanguageMonitor : IDisposable
             + $"pid={processId}");
     }
 
+    private bool IsInactive =>
+        Volatile.Read(ref _paused) || Volatile.Read(ref _disposed);
+
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _paused = true;
         _sequence++;
         _pending = null;
+        Interlocked.Exchange(ref _languageRequestActive, 0);
+        StopFocusMonitoring(interruptQuery: true);
         _timer.Stop();
         _worker.Stop();
         _overlay.HideImmediately();
         _timer.Dispose();
+        _focusTimer.Dispose();
     }
 
     private readonly record struct LanguageChange(

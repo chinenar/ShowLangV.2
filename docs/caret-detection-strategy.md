@@ -64,6 +64,6 @@ When the layout actually changes, ShowLang waits 45 ms for the Windows language 
 
 A worker response is accepted only while the same foreground window and keyboard layout are still current. Rapid changes in the same window are coalesced and only the newest language is displayed. If a provider fails or exceeds 180 ms, ShowLang terminates and recreates only the worker, then uses the screen-corner fallback for that event.
 
-There is no caret cache, idle recovery timer, WinEvent hook, per-app blacklist, or domain-name condition in the normal engine. Pause and Exit stop the worker together with language monitoring.
+There is no caret cache, idle recovery timer, per-app blacklist, or domain-name condition in the normal engine. A lightweight `EVENT_OBJECT_FOCUS` WinEvent hook is used only to request one debounced lookup when focus enters a new control. If the focused target is not editable or exposes no caret, the focus event is ignored rather than showing the screen-corner fallback. Pause and Exit stop the worker together with language monitoring.
 
 Do not reintroduce continuous caret warming or accessibility calls before the layout-change guard.

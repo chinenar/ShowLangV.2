@@ -10,6 +10,7 @@ The current native implementation replaces the original AutoHotkey script and is
 - Displays `TH`, `EN`, `JP`, or a language identifier near the text caret.
 - Polls only the inexpensive foreground keyboard layout while idle; it does not scan or cache caret positions in the background.
 - Captures the caret only after an actual language change: Win32 first, then one MSAA/UI Automation request through an isolated worker.
+- Also shows the current language when keyboard focus enters an editable field; non-editable focus changes stay silent.
 - Keeps a preloaded worker asleep between requests so modern controls remain fast without continuous accessibility activity.
 - Coalesces rapid layout switches and restarts only the worker if an accessibility provider times out.
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
