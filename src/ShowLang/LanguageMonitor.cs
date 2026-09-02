@@ -1,8 +1,14 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
 namespace ShowLangNative;
 
 internal sealed class LanguageMonitor : IDisposable
 {
     private const int CaretCaptureDelayMilliseconds = 45;
+    private const int CaretRetryDelayMilliseconds = 35;
+    private const int CaretRetryFastFailureMilliseconds = 140;
+    private const int CaretRetryCount = 2;
     private const int FocusCaptureDelayMilliseconds = 70;
     private const int FocusSuppressionMilliseconds = 300;
     private const int DuplicateFocusWindowMilliseconds = 350;
@@ -12,10 +18,12 @@ internal sealed class LanguageMonitor : IDisposable
     private readonly System.Windows.Forms.Timer _timer;
     private readonly System.Threading.Timer _focusTimer;
     private readonly NativeMethods.WinEventDelegate _focusCallback;
+    private readonly NativeMethods.LowLevelMouseDelegate _mouseCallback;
 
     private IntPtr? _previousLayout;
     private LanguageChange? _pending;
     private IntPtr _focusHook;
+    private IntPtr _mouseHook;
     private bool _checking;
     private bool _processing;
     private bool _paused = true;
@@ -31,7 +39,6 @@ internal sealed class LanguageMonitor : IDisposable
     private long _lastFocusShownAt;
     private IntPtr _proxyForeground;
     private bool _foregroundHasEditableProxy;
-    private bool _proxyLeftButtonWasDown;
     private bool _proxyFieldActive;
     private int _proxyHorizontalOffset;
 
@@ -43,6 +50,7 @@ internal sealed class LanguageMonitor : IDisposable
         _ = _overlay.Handle;
         _worker = worker;
         _focusCallback = OnFocusChanged;
+        _mouseCallback = OnMouseHook;
         _timer = new System.Windows.Forms.Timer
         {
             Interval = 50,
@@ -115,7 +123,7 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
-            CheckEditableProxyClick(foreground);
+            RefreshEditableProxyTracking(foreground);
 
             uint threadId = NativeMethods.GetInputThreadId(foreground);
             if (threadId == 0)
@@ -221,7 +229,7 @@ internal sealed class LanguageMonitor : IDisposable
                 }
 
                 AnchorTarget? accessible =
-                    await _worker.QueryAsync(change.Foreground);
+                    await QueryLanguageCaretWithRecoveryAsync(change);
 
                 if (IsInactive)
                 {
@@ -280,36 +288,118 @@ internal sealed class LanguageMonitor : IDisposable
         }
     }
 
-    private void CheckEditableProxyClick(IntPtr foreground)
+    private async Task<AnchorTarget?> QueryLanguageCaretWithRecoveryAsync(
+        LanguageChange change)
     {
-        if (_proxyForeground != foreground)
+        for (int attempt = 0; attempt <= CaretRetryCount; attempt++)
         {
-            _proxyForeground = foreground;
-            _foregroundHasEditableProxy =
-                CaretLocator.HasEditableProxy(foreground);
-            _proxyLeftButtonWasDown = false;
-            _proxyFieldActive = false;
-            _proxyHorizontalOffset = 0;
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            AnchorTarget? target =
+                await _worker.QueryAsync(change.Foreground);
+            stopwatch.Stop();
+            if (target is not null)
+            {
+                return target;
+            }
+
+            if (attempt >= CaretRetryCount
+                || stopwatch.ElapsedMilliseconds
+                    >= CaretRetryFastFailureMilliseconds
+                || IsInactive
+                || !IsStillCurrent(change)
+                || _pending is not null)
+            {
+                return null;
+            }
+
+            await Task.Delay(CaretRetryDelayMilliseconds);
         }
 
-        if (!_foregroundHasEditableProxy)
+        return null;
+    }
+
+    private void RefreshEditableProxyTracking(IntPtr foreground)
+    {
+        if (_proxyForeground == foreground
+            && _foregroundHasEditableProxy)
+        {
+            InstallMouseHook();
+            return;
+        }
+
+        if (!CaretLocator.HasEditableProxy(foreground))
+        {
+            UninstallMouseHook();
+            return;
+        }
+
+        _proxyForeground = foreground;
+        _foregroundHasEditableProxy = true;
+        _proxyFieldActive = false;
+        _proxyHorizontalOffset = 0;
+        InstallMouseHook();
+    }
+    private IntPtr OnMouseHook(
+        int code,
+        IntPtr message,
+        IntPtr data)
+    {
+        if (code >= 0
+            && message == (IntPtr)NativeMethods.WmLButtonUp
+            && !IsInactive)
+        {
+            NativeMethods.LowLevelMouseInfo info =
+                Marshal.PtrToStructure<NativeMethods.LowLevelMouseInfo>(data);
+            PostProxyMouseUp(info.Point);
+        }
+
+        return NativeMethods.CallNextHookEx(
+            _mouseHook,
+            code,
+            message,
+            data);
+    }
+
+    private void PostProxyMouseUp(NativeMethods.NativePoint point)
+    {
+        if (_overlay.IsDisposed || !_overlay.IsHandleCreated)
         {
             return;
         }
 
-        short state = NativeMethods.GetAsyncKeyState(
-            NativeMethods.VkLeftButton);
-        bool isDown = (state & 0x8000) != 0;
-        bool clickCompleted = !isDown
-            && (_proxyLeftButtonWasDown || (state & 0x0001) != 0);
-        _proxyLeftButtonWasDown = isDown;
-        if (!clickCompleted)
+        try
+        {
+            _overlay.BeginInvoke(
+                (Action)(() => HandleProxyMouseUp(point)));
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private void HandleProxyMouseUp(NativeMethods.NativePoint point)
+    {
+        if (IsInactive)
+        {
+            return;
+        }
+
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return;
+        }
+
+        RefreshEditableProxyTracking(foreground);
+        if (!_foregroundHasEditableProxy
+            || _proxyForeground != foreground)
         {
             return;
         }
 
         if (!CaretLocator.TryLocateEditableProxyTarget(
                 foreground,
+                point,
                 out AnchorTarget target,
                 out int horizontalOffset))
         {
@@ -385,7 +475,6 @@ internal sealed class LanguageMonitor : IDisposable
     {
         _proxyForeground = IntPtr.Zero;
         _foregroundHasEditableProxy = false;
-        _proxyLeftButtonWasDown = false;
         _proxyFieldActive = false;
         _proxyHorizontalOffset = 0;
     }
@@ -413,6 +502,34 @@ internal sealed class LanguageMonitor : IDisposable
         }
     }
 
+    private void InstallMouseHook()
+    {
+        if (_mouseHook != IntPtr.Zero || IsInactive)
+        {
+            return;
+        }
+
+        _mouseHook = NativeMethods.SetWindowsHookEx(
+            NativeMethods.WhMouseLl,
+            _mouseCallback,
+            NativeMethods.GetModuleHandle(null),
+            0);
+        if (_mouseHook == IntPtr.Zero)
+        {
+            AppLog.Write("MOUSE hook installation failed");
+        }
+    }
+
+    private void UninstallMouseHook()
+    {
+        if (_mouseHook == IntPtr.Zero)
+        {
+            return;
+        }
+
+        NativeMethods.UnhookWindowsHookEx(_mouseHook);
+        _mouseHook = IntPtr.Zero;
+    }
     private void StopFocusMonitoring(bool interruptQuery)
     {
         Interlocked.Increment(ref _focusSequence);
@@ -428,6 +545,12 @@ internal sealed class LanguageMonitor : IDisposable
         {
             NativeMethods.UnhookWinEvent(_focusHook);
             _focusHook = IntPtr.Zero;
+        }
+
+        if (_mouseHook != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = IntPtr.Zero;
         }
 
         if (interruptQuery

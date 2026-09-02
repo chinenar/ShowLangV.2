@@ -83,8 +83,27 @@ internal static class CaretLocator
         target = default;
         horizontalOffset = 0;
         if (!NativeMethods.GetCursorPos(
-                out NativeMethods.NativePoint pointer)
-            || !TryFindEditableProxyRect(
+                out NativeMethods.NativePoint pointer))
+        {
+            return false;
+        }
+
+        return TryLocateEditableProxyTarget(
+            foreground,
+            pointer,
+            out target,
+            out horizontalOffset);
+    }
+
+    internal static bool TryLocateEditableProxyTarget(
+        IntPtr foreground,
+        NativeMethods.NativePoint pointer,
+        out AnchorTarget target,
+        out int horizontalOffset)
+    {
+        target = default;
+        horizontalOffset = 0;
+        if (!TryFindEditableProxyRect(
                 foreground,
                 out NativeMethods.NativeRect proxyRect)
             || pointer.X < proxyRect.Left

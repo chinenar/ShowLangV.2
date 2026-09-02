@@ -8,7 +8,6 @@ internal static class NativeMethods
     internal static readonly IntPtr HwndTopMost = new(-1);
 
     internal const int SwShowNoActivate = 4;
-    internal const int VkLeftButton = 0x01;
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
     internal const uint SwpNoOwnerZOrder = 0x0200;
@@ -26,6 +25,8 @@ internal static class NativeMethods
     internal const uint EventObjectFocus = 0x8005;
     internal const uint WineventOutOfContext = 0x0000;
     internal const uint WineventSkipOwnProcess = 0x0002;
+    internal const int WhMouseLl = 14;
+    internal const int WmLButtonUp = 0x0202;
 
     internal const uint UlwAlpha = 0x00000002;
     internal const byte AcSrcOver = 0x00;
@@ -69,6 +70,10 @@ internal static class NativeMethods
         int idChild,
         uint eventThread,
         uint eventTime);
+    internal delegate IntPtr LowLevelMouseDelegate(
+        int code,
+        IntPtr message,
+        IntPtr data);
 
     [DllImport("user32.dll")]
     internal static extern IntPtr SetWinEventHook(
@@ -83,6 +88,27 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnhookWinEvent(IntPtr hook);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookEx(
+        int hookId,
+        LowLevelMouseDelegate callback,
+        IntPtr module,
+        uint threadId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(
+        IntPtr hook,
+        int code,
+        IntPtr message,
+        IntPtr data);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr GetModuleHandle(string? moduleName);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -104,8 +130,6 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")]
-    internal static extern short GetAsyncKeyState(int virtualKey);
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
 
@@ -206,6 +230,16 @@ internal static class NativeMethods
         int attribute,
         ref int value,
         int valueSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LowLevelMouseInfo
+    {
+        internal NativePoint Point;
+        internal uint MouseData;
+        internal uint Flags;
+        internal uint Time;
+        internal UIntPtr ExtraInfo;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct NativePoint

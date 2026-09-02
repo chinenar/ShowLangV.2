@@ -9,13 +9,13 @@ The current native implementation replaces the original AutoHotkey script and is
 - Detects the keyboard layout of the focused input thread.
 - Displays `TH`, `EN`, `JP`, or a language identifier near the text caret.
 - Polls only the inexpensive foreground keyboard layout while idle; it does not scan or cache caret positions in the background.
-- Captures the caret only after an actual language change: Win32 first, then one MSAA/UI Automation request through an isolated worker.
+- Captures the caret only after an actual language change: Win32 first, then an isolated MSAA/UI Automation worker with bounded fast-miss recovery for focus handoff races.
 - Also shows the current language when keyboard focus enters an editable field; non-editable focus changes stay silent.
 - Keeps a preloaded worker asleep between requests so modern controls remain fast without continuous accessibility activity.
 - Coalesces rapid layout switches and restarts only the worker if an accessibility provider times out.
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
-- Handles inaccessible text-field proxy windows by remembering the clicked field-relative anchor without requiring ShowLang to run elevated.
+- Handles inaccessible text-field proxy windows from an actual mouse-up event, remembering the clicked field-relative anchor without polling mouse-button state.
 - Corrects Chromium-style address bars that expose the caret at the field's left edge instead of its real text position.
 - Scales the caret gap together with the selected overlay size.
 - Does not steal focus and allows mouse clicks to pass through the overlay.
