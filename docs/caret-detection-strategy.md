@@ -57,6 +57,11 @@ Only promote the branch to stable when all baseline cases pass. New failures sta
 - Adjacent-character geometry remains a fallback only after direct collapsed geometry fails and must still stay inside the focused control.
 - TextPattern2 remains optional: some Chromium providers report the pattern query as successful while returning no usable pattern object, so it must never be the only path.
 - Rapid switches in the same foreground window are coalesced so only the newest language is shown.
+## Coordinate-space policy
+
+The tray process, one-shot probe, and persistent caret worker must enter `PerMonitorV2` DPI awareness before any Win32, MSAA, or UI Automation call. Mixing a per-monitor-aware tray with a system-DPI-aware worker virtualizes caret coordinates on secondary monitors, especially mixed-scale portrait layouts with negative virtual-desktop origins.
+
+Caret rectangles and overlay placement stay in the same physical virtual-desktop coordinate space. Do not rotate portrait coordinates manually; Windows already reports the rotated monitor bounds.
 ## Trigger and performance policy
 
 The 50 ms timer may read only the foreground window, focused input thread, and keyboard layout while the layout is unchanged. It must not call MSAA, UI Automation, TextPattern, caret geometry APIs, or background caret tracking.

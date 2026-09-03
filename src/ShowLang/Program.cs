@@ -7,6 +7,12 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // Establish PerMonitorV2 before worker/probe code touches UIA.
+        // Otherwise the main tray is per-monitor aware but the caret worker
+        // remains system-DPI aware and returns virtualized coordinates on
+        // secondary monitors with a different scale/orientation.
+        ApplicationConfiguration.Initialize();
+
         if (CaretWorkerMode.TryRun(args))
         {
             // The worker owns no tray UI and exits with its parent pipe.
@@ -32,7 +38,6 @@ internal static class Program
             return;
         }
 
-        ApplicationConfiguration.Initialize();
         Application.Run(new LanguageApplicationContext());
         GC.KeepAlive(singleInstance);
     }
