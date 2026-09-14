@@ -27,6 +27,7 @@ internal static class NativeMethods
     internal const uint WineventSkipOwnProcess = 0x0002;
     internal const int WhMouseLl = 14;
     internal const int WmLButtonUp = 0x0202;
+    internal const uint GwOwner = 4;
 
     internal const uint UlwAlpha = 0x00000002;
     internal const byte AcSrcOver = 0x00;
@@ -120,6 +121,17 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetParent(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetWindow(
+        IntPtr hWnd,
+        uint command);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetClassName(

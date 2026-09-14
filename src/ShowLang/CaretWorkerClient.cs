@@ -87,7 +87,30 @@ internal sealed class CaretWorkerClient : IDisposable
             _ = WarmUpAsync();
         }
     }
-    internal async Task<AnchorTarget?> QueryAsync(IntPtr foreground)
+    internal async Task<AnchorTarget?> QueryAsync(
+        IntPtr foreground)
+    {
+        CaretWorkerResponse? response = await SendRequestAsync(
+            foreground,
+            CaretWorkerMode.CaretOperation)
+            .ConfigureAwait(false);
+        return response?.ToAnchorTarget();
+    }
+
+    internal async Task<PhotoshopTextState>
+        QueryPhotoshopTextStateAsync(IntPtr foreground)
+    {
+        CaretWorkerResponse? response = await SendRequestAsync(
+            foreground,
+            CaretWorkerMode.PhotoshopStateOperation)
+            .ConfigureAwait(false);
+        return response?.PhotoshopState
+            ?? PhotoshopTextState.Unknown;
+    }
+
+    private async Task<CaretWorkerResponse?> SendRequestAsync(
+        IntPtr foreground,
+        string operation)
     {
         if (foreground == IntPtr.Zero
             || !TryGetLifetime(out WorkerSnapshot snapshot))
@@ -118,6 +141,7 @@ internal sealed class CaretWorkerClient : IDisposable
                 ref _nextRequestId);
             CaretWorkerRequest request = new()
             {
+                Operation = operation,
                 RequestId = requestId,
                 Window = foreground.ToInt64(),
             };
@@ -147,7 +171,7 @@ internal sealed class CaretWorkerClient : IDisposable
                     "The caret worker returned an invalid response.");
             }
 
-            return response.ToAnchorTarget();
+            return response;
         }
         catch (TimeoutException)
         {

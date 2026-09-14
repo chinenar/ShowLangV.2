@@ -39,8 +39,12 @@ internal sealed class LanguageMonitor : IDisposable
     private long _lastFocusShownAt;
     private IntPtr _proxyForeground;
     private bool _foregroundHasEditableProxy;
+    private bool _foregroundIsPhotoshop;
     private bool _proxyFieldActive;
     private int _proxyHorizontalOffset;
+    private bool _photoshopTextAnchorActive;
+    private AnchorTarget _photoshopTextAnchor;
+    private long _photoshopClickSequence;
 
     internal LanguageMonitor(
         OverlayForm overlay,
@@ -122,6 +126,9 @@ internal sealed class LanguageMonitor : IDisposable
             {
                 return;
             }
+
+            foreground = PhotoshopTextDetector.NormalizeForeground(
+                foreground);
 
             RefreshEditableProxyTracking(foreground);
 
@@ -229,7 +236,7 @@ internal sealed class LanguageMonitor : IDisposable
                 }
 
                 AnchorTarget? accessible =
-                    await QueryLanguageCaretWithRecoveryAsync(change);
+                    await QueryLanguageTargetAsync(change);
 
                 if (IsInactive)
                 {
@@ -288,6 +295,22 @@ internal sealed class LanguageMonitor : IDisposable
         }
     }
 
+    private async Task<AnchorTarget?> QueryLanguageTargetAsync(
+        LanguageChange change)
+    {
+        if (_photoshopTextAnchorActive
+            && _proxyForeground == change.Foreground)
+        {
+            // The click was validated while Photoshop was using its Type
+            // tool/edit session. Win+Space temporarily moves foreground and
+            // focus to Photoshop's owned Type Bar, where COM may report an
+            // empty tool. Keep the captured anchor until a later click or
+            // foreground change explicitly clears it.
+            return _photoshopTextAnchor;
+        }
+
+        return await QueryLanguageCaretWithRecoveryAsync(change);
+    }
     private async Task<AnchorTarget?> QueryLanguageCaretWithRecoveryAsync(
         LanguageChange change)
     {
@@ -321,24 +344,39 @@ internal sealed class LanguageMonitor : IDisposable
     private void RefreshEditableProxyTracking(IntPtr foreground)
     {
         if (_proxyForeground == foreground
-            && _foregroundHasEditableProxy)
+            && (_foregroundHasEditableProxy
+                || _foregroundIsPhotoshop))
         {
             InstallMouseHook();
             return;
         }
 
-        if (!CaretLocator.HasEditableProxy(foreground))
+        bool foregroundChanged = _proxyForeground != foreground;
+        bool hasEditableProxy =
+            CaretLocator.HasEditableProxy(foreground);
+        bool isPhotoshop =
+            PhotoshopTextDetector.IsPhotoshopWindow(foreground);
+
+        if (foregroundChanged)
+        {
+            _proxyFieldActive = false;
+            _proxyHorizontalOffset = 0;
+            ClearPhotoshopTextAnchor();
+        }
+
+        _proxyForeground = foreground;
+        _foregroundHasEditableProxy = hasEditableProxy;
+        _foregroundIsPhotoshop = isPhotoshop;
+
+        if (!hasEditableProxy && !isPhotoshop)
         {
             UninstallMouseHook();
             return;
         }
 
-        _proxyForeground = foreground;
-        _foregroundHasEditableProxy = true;
-        _proxyFieldActive = false;
-        _proxyHorizontalOffset = 0;
         InstallMouseHook();
     }
+
     private IntPtr OnMouseHook(
         int code,
         IntPtr message,
@@ -390,7 +428,17 @@ internal sealed class LanguageMonitor : IDisposable
             return;
         }
 
+        foreground = PhotoshopTextDetector.NormalizeForeground(
+            foreground);
+
         RefreshEditableProxyTracking(foreground);
+        if (_foregroundIsPhotoshop
+            && _proxyForeground == foreground)
+        {
+            HandlePhotoshopMouseUp(foreground, point);
+            return;
+        }
+
         if (!_foregroundHasEditableProxy
             || _proxyForeground != foreground)
         {
@@ -438,6 +486,97 @@ internal sealed class LanguageMonitor : IDisposable
             });
     }
 
+    private void HandlePhotoshopMouseUp(
+        IntPtr foreground,
+        NativeMethods.NativePoint point)
+    {
+        long sequence = ++_photoshopClickSequence;
+        if (!PhotoshopTextDetector.TryCreateDocumentAnchor(
+                foreground,
+                point,
+                out AnchorTarget target))
+        {
+            ClearPhotoshopTextAnchor();
+            return;
+        }
+
+        _ = ConfirmPhotoshopTextClickAsync(
+            foreground,
+            target,
+            sequence);
+    }
+
+    private async Task ConfirmPhotoshopTextClickAsync(
+        IntPtr foreground,
+        AnchorTarget target,
+        long sequence)
+    {
+        try
+        {
+            PhotoshopTextState state = await _worker
+                .QueryPhotoshopTextStateAsync(foreground);
+            if (IsInactive
+                || sequence != _photoshopClickSequence
+                || PhotoshopTextDetector.NormalizeForeground(
+                    NativeMethods.GetForegroundWindow()) != foreground)
+            {
+                return;
+            }
+
+            if (state == PhotoshopTextState.Inactive)
+            {
+                ClearPhotoshopTextAnchor();
+                return;
+            }
+
+            _photoshopTextAnchorActive = true;
+            _photoshopTextAnchor = target;
+            ShowCurrentPhotoshopLanguage(foreground, target);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+    }
+
+    private void ShowCurrentPhotoshopLanguage(
+        IntPtr foreground,
+        AnchorTarget target)
+    {
+        uint threadId = NativeMethods.GetInputThreadId(foreground);
+        if (threadId == 0)
+        {
+            return;
+        }
+
+        IntPtr layout = NativeMethods.GetKeyboardLayout(threadId);
+        ushort languageId = unchecked(
+            (ushort)((long)layout & 0xFFFF));
+        LanguageChange change = new(
+            0,
+            foreground,
+            layout,
+            LanguageNames.FromLanguageId(languageId));
+        if (!IsStillCurrent(change)
+            || IsDuplicateFocusShow(change, target))
+        {
+            return;
+        }
+
+        Show(
+            change,
+            target with
+            {
+                Source = "Focus " + target.Source,
+            });
+    }
+
+    private void ClearPhotoshopTextAnchor()
+    {
+        _photoshopTextAnchorActive = false;
+        _photoshopTextAnchor = default;
+    }
+
     private bool TryGetEditableProxyLanguageTarget(
         IntPtr foreground,
         out AnchorTarget target)
@@ -475,8 +614,11 @@ internal sealed class LanguageMonitor : IDisposable
     {
         _proxyForeground = IntPtr.Zero;
         _foregroundHasEditableProxy = false;
+        _foregroundIsPhotoshop = false;
         _proxyFieldActive = false;
         _proxyHorizontalOffset = 0;
+        _photoshopClickSequence++;
+        ClearPhotoshopTextAnchor();
     }
 
     private void InstallFocusHook()
@@ -640,6 +782,9 @@ internal sealed class LanguageMonitor : IDisposable
                 return;
             }
 
+            foreground = PhotoshopTextDetector.NormalizeForeground(
+                foreground);
+
             uint threadId = NativeMethods.GetInputThreadId(foreground);
             if (threadId == 0)
             {
@@ -776,7 +921,8 @@ internal sealed class LanguageMonitor : IDisposable
 
     private static bool IsStillCurrent(LanguageChange change)
     {
-        if (NativeMethods.GetForegroundWindow() != change.Foreground)
+        if (PhotoshopTextDetector.NormalizeForeground(
+                NativeMethods.GetForegroundWindow()) != change.Foreground)
         {
             return false;
         }

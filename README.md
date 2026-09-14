@@ -1,5 +1,7 @@
 # ShowLang V.2
 
+**Current release: 2.0.0**
+
 ShowLang is a lightweight Windows tray utility that briefly displays the active keyboard language near the current text caret whenever the input language changes.
 
 The current native implementation replaces the original AutoHotkey script and is built with .NET 8 Windows Forms, Win32 APIs, MSAA, and UI Automation.
@@ -16,6 +18,7 @@ The current native implementation replaces the original AutoHotkey script and is
 - Shows the overlay at the lower-right corner of the active monitor when no text caret is available.
 - Supports modern text surfaces such as Windows Terminal, Raycast, Electron, and WebView-based apps when they expose accessibility information.
 - Handles inaccessible text-field proxy windows from an actual mouse-up event, remembering the clicked field-relative anchor without polling mouse-button state.
+- Supports Photoshop canvas text editing by validating the Type tool in the isolated worker and anchoring the indicator to the latest confirmed click inside the document text surface.
 - Corrects Chromium-style address bars that expose the caret at the field's left edge instead of its real text position.
 - Scales the caret gap together with the selected overlay size.
 - Does not steal focus and allows mouse clicks to pass through the overlay.
@@ -104,6 +107,8 @@ app\                   Locally published executable, ignored by Git
 ## Compatibility notes
 
 A normal topmost window generally works over desktop applications and windowed or borderless games. Exclusive fullscreen, protected rendering surfaces, elevated applications, and anti-cheat systems may still prevent overlays or accessibility queries.
+
+Photoshop does not expose the canvas text caret through Win32, MSAA, or UI Automation. ShowLang therefore uses the latest click that was confirmed while the Photoshop Type tool or active text-edit session was available. Clicking a new insertion point refreshes the anchor; keyboard-only caret movement inside the same text layer cannot be tracked character by character.
 
 Pause stops language monitoring, caret queries, and overlay rendering, but it does not hide the ShowLang process from Task Manager or other process-list checks.
 

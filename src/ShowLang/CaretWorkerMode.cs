@@ -7,6 +7,8 @@ namespace ShowLangNative;
 
 internal sealed class CaretWorkerRequest
 {
+    public string Operation { get; init; } =
+        CaretWorkerMode.CaretOperation;
     public long RequestId { get; init; }
     public long Window { get; init; }
 }
@@ -21,6 +23,8 @@ internal sealed class CaretWorkerResponse
     public int Height { get; init; }
     public string Source { get; init; } = string.Empty;
     public string? Error { get; init; }
+    public PhotoshopTextState PhotoshopState { get; init; } =
+        PhotoshopTextState.Unknown;
 
     internal AnchorTarget? ToAnchorTarget()
     {
@@ -38,6 +42,8 @@ internal sealed class CaretWorkerResponse
 
 internal static class CaretWorkerMode
 {
+    internal const string CaretOperation = "caret";
+    internal const string PhotoshopStateOperation = "photoshop-state";
     internal const string Command = "--caret-worker";
     internal const string ReadyMessage = "SHOWLANG_CARET_WORKER_READY";
 
@@ -90,6 +96,33 @@ internal static class CaretWorkerMode
             }
 
             IntPtr foreground = new(request.Window);
+            if (string.Equals(
+                    request.Operation,
+                    PhotoshopStateOperation,
+                    StringComparison.Ordinal))
+            {
+                PhotoshopTextState state =
+                    PhotoshopTextDetector.QueryState(foreground);
+                return new CaretWorkerResponse
+                {
+                    RequestId = request.RequestId,
+                    Success = state != PhotoshopTextState.Unknown,
+                    PhotoshopState = state,
+                    Error = state == PhotoshopTextState.Unknown
+                        ? "Photoshop text state is unavailable."
+                        : null,
+                };
+            }
+
+            if (!string.Equals(
+                    request.Operation,
+                    CaretOperation,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "The caret worker operation is invalid.");
+            }
+
             AnchorTarget? target =
                 CaretLocator.QueryAccessibleTarget(foreground);
             if (target is not AnchorTarget found)

@@ -17,6 +17,7 @@ Goal: avoid site/app-specific fixes. Detect the caret by capability/provider fam
 - Browser omnibox/address-field providers: use the document-prefix edge workaround only for browser address controls whose collapsed rectangle is pinned to the control's left edge.
 - Normal web inputs, textareas and contenteditable controls: never use the browser-address workaround.
 - Inaccessible text-field proxy windows: a recognized provider/control class may expose only the field bounds while the real elevated/protected text element is inaccessible. Record the field-relative horizontal anchor only after a real click inside that proxy and reuse it while that foreground/field remains active; never key this fallback on an application process name.
+- Photoshop canvas text: Photoshop exposes neither a Win32 nor an accessibility caret for text being edited directly on the document. Validate the Photoshop Type tool/edit session in the worker, record the latest click inside the `PSViewC`/`OWL.Document` surface, and reuse that physical-screen anchor until a later click or foreground change clears it.
 
 ## Candidate validation
 
@@ -45,6 +46,7 @@ Every caret-engine change must be checked against these families:
 - Normal web `<input>` / search fields (YouTube, Shopee are current examples)
 - Web contenteditable / rich-text composer (Facebook is the current example)
 - Windows Search
+- Photoshop horizontal and vertical Type tools
 - No editable target -> screen-corner fallback
 
 Only promote the branch to stable when all baseline cases pass. New failures stay in experimental and must not move the stable tag.
@@ -70,6 +72,6 @@ When the layout actually changes, ShowLang waits 45 ms for the Windows language 
 
 A worker response is accepted only while the same foreground window and keyboard layout are still current. Rapid changes in the same window are coalesced and only the newest language is displayed. If a provider fails or exceeds 180 ms, ShowLang terminates and recreates only the worker, then uses the screen-corner fallback for that event.
 
-There is no caret cache, idle recovery timer, per-app blacklist, or domain-name condition in the normal engine. A lightweight `EVENT_OBJECT_FOCUS` WinEvent hook is used only to request one debounced lookup when focus enters a new control. If the focused target is not editable or exposes no caret, the focus event is ignored rather than showing the screen-corner fallback. Only while a recognized inaccessible text-field proxy window is foreground, a low-level mouse hook observes completed left-click events; it is removed when that proxy is no longer foreground and does not poll mouse-button state, UI Automation, or caret geometry. A click inside the proxy records a field-relative anchor; a click elsewhere in that same proxy window deactivates it. Pause and Exit remove the mouse hook and stop the worker together with language monitoring.
+There is no caret cache, idle recovery timer, per-app blacklist, or domain-name condition in the normal engine. A lightweight `EVENT_OBJECT_FOCUS` WinEvent hook is used only to request one debounced lookup when focus enters a new control. If the focused target is not editable or exposes no caret, the focus event is ignored rather than showing the screen-corner fallback. Only while a recognized inaccessible text-field proxy window is foreground, a low-level mouse hook observes completed left-click events; it is removed when that proxy is no longer foreground and does not poll mouse-button state, UI Automation, or caret geometry. A click inside the proxy records a field-relative anchor; a click elsewhere in that same proxy window deactivates it. Pause and Exit remove the mouse hook and stop the worker together with language monitoring. Photoshop uses the same completed-click trigger: the worker validates Type-tool/edit state once, and subsequent language changes reuse the confirmed document anchor without calling Photoshop COM on the critical path.
 
 Do not reintroduce continuous caret warming or accessibility calls before the layout-change guard.
